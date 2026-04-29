@@ -52,6 +52,14 @@ function makeOAuthClient() {
   )
 }
 
+function resolveFrontendUrl(req) {
+  if (process.env.FRONTEND_URL) return process.env.FRONTEND_URL
+  const host = req.headers['x-forwarded-host'] || req.headers.host
+  if (!host) return 'http://localhost:5174'
+  const proto = req.headers['x-forwarded-proto'] || (host.includes('localhost') ? 'http' : 'https')
+  return `${proto}://${host}`
+}
+
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 // GET /api/gmail/auth
@@ -74,7 +82,7 @@ router.get('/auth', (_req, res) => {
 // GET /api/gmail/callback
 router.get('/callback', async (req, res) => {
   const { code, error } = req.query
-  const frontend = process.env.FRONTEND_URL ?? 'http://localhost:5174'
+  const frontend = resolveFrontendUrl(req)
   if (error || !code) return res.redirect(`${frontend}/?gmailError=${error ?? 'access_denied'}`)
 
   try {
@@ -102,7 +110,7 @@ router.get('/callback', async (req, res) => {
     res.redirect(`${frontend}/?syncToken=${syncToken}&gmailConnected=true`)
   } catch (err) {
     console.error('[gmail/callback]', err.message)
-    res.redirect(`${process.env.FRONTEND_URL ?? 'http://localhost:5174'}/?gmailError=token_exchange_failed`)
+    res.redirect(`${resolveFrontendUrl(req)}/?gmailError=token_exchange_failed`)
   }
 })
 
