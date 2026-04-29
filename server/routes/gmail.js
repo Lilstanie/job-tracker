@@ -109,7 +109,7 @@ router.post('/sync', async (req, res) => {
     return res.status(401).json({ error: 'Not connected — please reconnect Gmail.' })
   }
 
-  const { applications = [], days = 30, knownIds = [], userTimeZone = 'UTC' } = req.body
+  const { applications = [], days = 30, knownIds = [], userTimeZone = 'UTC', debug = false } = req.body
   const oauth2Client = makeOAuthClient()
   oauth2Client.setCredentials(session.tokens)
 
@@ -123,10 +123,22 @@ router.post('/sync', async (req, res) => {
   try {
     const { emails, rawCount } = await fetchJobEmails(oauth2Client, Math.min(Math.max(parseInt(days) || 30, 1), 180))
     if (!emails.length) {
-      return res.json({ results: [], emailCount: 0, rawCount: 0, skippedKnown: 0 })
+      return res.json({
+        results: [],
+        emailCount: 0,
+        rawCount: 0,
+        skippedKnown: 0,
+        ...(debug ? { debugPayload: { fetchedEmails: [] } } : {}),
+      })
     }
     const { results, skippedKnown } = await classifyEmails(emails, applications, knownIds, userTimeZone)
-    res.json({ results, emailCount: emails.length, rawCount, skippedKnown })
+    res.json({
+      results,
+      emailCount: emails.length,
+      rawCount,
+      skippedKnown,
+      ...(debug ? { debugPayload: { fetchedEmails: emails, classifiedResults: results } } : {}),
+    })
   } catch (err) {
     console.error('[gmail/sync]', err.message)
     if (err.message?.includes('invalid_grant') || err.status === 401) {

@@ -24,7 +24,7 @@ export const genId = () => `app-${Date.now()}-${Math.random().toString(36).slice
 const _SAMPLE_APPLICATIONS = [
   {
     id: 'app-1',
-    company: 'Atlassian',
+    company: 'Company Alpha',
     role: 'Graduate Software Engineer',
     stage: 'Video Interview',
     applied: '2026-03-10',
@@ -32,7 +32,7 @@ const _SAMPLE_APPLICATIONS = [
     tags: ['Tech'],
     url: '',
     notes: 'Had a great call with recruiter. System design round next.',
-    contacts: [{ name: 'Sarah Chen', email: 'sarah@atlassian.com' }],
+    contacts: [{ name: 'Recruiter A', email: 'recruiter.a@example.com' }],
     documents: [{ label: 'Resume v3', url: '#' }],
     nextStep: { text: 'Prepare system design', due: '2026-04-29' },
     history: [
@@ -43,7 +43,7 @@ const _SAMPLE_APPLICATIONS = [
   },
   {
     id: 'app-2',
-    company: 'CommBank',
+    company: 'Company Beta',
     role: 'Engineering Graduate',
     stage: 'Assessment Centre',
     applied: '2026-02-20',
@@ -63,7 +63,7 @@ const _SAMPLE_APPLICATIONS = [
   },
   {
     id: 'app-3',
-    company: 'NAB',
+    company: 'Company Gamma',
     role: 'DD&AI Graduate',
     stage: 'Video Interview',
     applied: '2026-02-15',
@@ -71,7 +71,7 @@ const _SAMPLE_APPLICATIONS = [
     tags: ['Finance', 'Tech'],
     url: '',
     notes: 'Data & AI stream. Brush up on ML fundamentals.',
-    contacts: [{ name: 'James Wu', email: 'james.wu@nab.com.au' }],
+    contacts: [{ name: 'Recruiter B', email: 'recruiter.b@example.com' }],
     documents: [],
     nextStep: null,
     history: [
@@ -82,7 +82,7 @@ const _SAMPLE_APPLICATIONS = [
   },
   {
     id: 'app-4',
-    company: 'NEXTDC',
+    company: 'Company Delta',
     role: 'Graduate Program',
     stage: 'Online Assessment',
     applied: '2026-03-01',
@@ -100,13 +100,13 @@ const _SAMPLE_APPLICATIONS = [
   },
   {
     id: 'app-5',
-    company: 'Google',
+    company: 'Company Epsilon',
     role: 'Associate Product Manager',
     stage: 'Applied',
     applied: '2026-04-01',
     deadline: null,
     tags: ['Tech'],
-    url: 'https://careers.google.com',
+    url: 'https://careers.example.com',
     notes: 'APM program — very competitive. Tailor cover letter to product thinking.',
     contacts: [],
     documents: [{ label: 'Cover Letter', url: '#' }],
@@ -117,7 +117,7 @@ const _SAMPLE_APPLICATIONS = [
   },
   {
     id: 'app-6',
-    company: 'Telstra',
+    company: 'Company Zeta',
     role: 'Graduate Software Engineer',
     stage: 'Offer',
     applied: '2026-01-20',
@@ -125,7 +125,7 @@ const _SAMPLE_APPLICATIONS = [
     tags: ['Tech', 'Telco'],
     url: '',
     notes: '🎉 Offer received! $85k base + super. Decision needed by May 10.',
-    contacts: [{ name: 'Priya Sharma', email: 'priya.sharma@team.telstra.com' }],
+    contacts: [{ name: 'Recruiter C', email: 'recruiter.c@example.com' }],
     documents: [{ label: 'Offer Letter', url: '#' }],
     nextStep: { text: 'Review offer terms', due: '2026-05-10' },
     history: [
@@ -138,7 +138,7 @@ const _SAMPLE_APPLICATIONS = [
   },
   {
     id: 'app-7',
-    company: 'Macquarie Group',
+    company: 'Company Eta',
     role: 'Technology Graduate',
     stage: 'Applied',
     applied: '2026-04-10',
@@ -155,7 +155,7 @@ const _SAMPLE_APPLICATIONS = [
   },
   {
     id: 'app-8',
-    company: 'Quantium',
+    company: 'Company Theta',
     role: 'Graduate Data Analyst',
     stage: 'Rejected',
     applied: '2026-02-01',

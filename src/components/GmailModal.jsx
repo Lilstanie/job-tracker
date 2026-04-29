@@ -177,7 +177,7 @@ const CONFIDENCE_LEVELS = ['high', 'medium', 'low']
 const CONFIDENCE_COLORS = { high: '#22c55e', medium: '#f59e0b', low: '#6b7280' }
 
 // ─── View: results ─────────────────────────────────────────────────────────
-function ResultsView({ results, emailCount, rawCount, skippedKnown, onApply, onClose, onResetHistory, autoAppliedCount }) {
+function ResultsView({ results, emailCount, rawCount, skippedKnown, onApply, onClose, onResetHistory, autoAppliedCount, onPrintJson }) {
   // Default: show high + medium; auto-include low if there are no high/medium results
   const hasHighOrMedium = results.some(r => r.confidence === 'high' || r.confidence === 'medium')
   const [visibleLevels, setVisibleLevels] = useState(
@@ -282,6 +282,13 @@ function ResultsView({ results, emailCount, rawCount, skippedKnown, onApply, onC
             </span>
           )}
         </p>
+        <button
+          onClick={onPrintJson}
+          className="text-xs mt-2"
+          style={{ color: '#6c63ff', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+        >
+          Print sync JSON to console
+        </button>
       </div>
 
       <div className="flex items-center gap-2 mb-4">
@@ -460,6 +467,8 @@ export default function GmailModal({ onClose, syncToken, profile, onConnected, o
   const [autoAppliedCount, setAutoAppliedCount] = useState(0)
   const [errorMsg, setErrorMsg] = useState('')
   const [days, setDays] = useState(30)
+  const [debugSyncJson, setDebugSyncJson] = useState(() => localStorage.getItem('trackr-debug-sync-json') === 'true')
+  const [lastSyncJson, setLastSyncJson] = useState(null)
   const [autoApplyHigh, setAutoApplyHigh] = useState(
     () => localStorage.getItem('trackr-auto-apply-high') === 'true'
   )
@@ -469,6 +478,14 @@ export default function GmailModal({ onClose, syncToken, profile, onConnected, o
     setAutoApplyHigh(prev => {
       const next = !prev
       localStorage.setItem('trackr-auto-apply-high', String(next))
+      return next
+    })
+  }
+
+  const toggleDebugSyncJson = () => {
+    setDebugSyncJson(prev => {
+      const next = !prev
+      localStorage.setItem('trackr-debug-sync-json', String(next))
       return next
     })
   }
@@ -513,10 +530,15 @@ export default function GmailModal({ onClose, syncToken, profile, onConnected, o
           days,
           knownIds,
           userTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          debug: debugSyncJson,
         }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Sync failed')
+      setLastSyncJson(data)
+      if (debugSyncJson) {
+        console.log('[Gmail Sync JSON]', data)
+      }
       const allResults = data.results ?? []
       setEmailCount(data.emailCount ?? 0)
       setRawCount(data.rawCount ?? data.emailCount ?? 0)
@@ -586,10 +608,29 @@ export default function GmailModal({ onClose, syncToken, profile, onConnected, o
         {/* Views */}
         {view === 'idle' && <ConnectView onConnect={handleConnect} />}
         {(view === 'ready' || view === 'syncing') && (
-          <ReadyView onSync={handleSync} onDisconnect={handleDisconnect} onResetHistory={handleResetHistory} syncing={view === 'syncing'} profile={profile} days={days} onDaysChange={setDays} autoApplyHigh={autoApplyHigh} onToggleAutoApply={toggleAutoApply} />
+          <>
+            <ReadyView onSync={handleSync} onDisconnect={handleDisconnect} onResetHistory={handleResetHistory} syncing={view === 'syncing'} profile={profile} days={days} onDaysChange={setDays} autoApplyHigh={autoApplyHigh} onToggleAutoApply={toggleAutoApply} />
+            <div className="flex items-center justify-between mt-2 px-3 py-2 rounded-xl" style={{ background: '#16161d', border: '1px solid #2a2a38' }}>
+              <div>
+                <p className="text-xs font-medium" style={{ color: '#e2e2e8' }}>Debug sync JSON</p>
+                <p className="text-xs mt-0.5" style={{ color: '#6b6b84' }}>Include fetched emails in response and log to console</p>
+              </div>
+              <ToggleSwitch on={debugSyncJson} onToggle={toggleDebugSyncJson} />
+            </div>
+          </>
         )}
         {view === 'results' && (
-          <ResultsView results={results} emailCount={emailCount} rawCount={rawCount} skippedKnown={skippedKnown} onApply={handleApply} onClose={onClose} onResetHistory={handleResetHistory} autoAppliedCount={autoAppliedCount} />
+          <ResultsView
+            results={results}
+            emailCount={emailCount}
+            rawCount={rawCount}
+            skippedKnown={skippedKnown}
+            onApply={handleApply}
+            onClose={onClose}
+            onResetHistory={handleResetHistory}
+            autoAppliedCount={autoAppliedCount}
+            onPrintJson={() => console.log('[Gmail Sync JSON]', lastSyncJson ?? { message: 'No sync data yet' })}
+          />
         )}
         {view === 'error' && (
           <div className="flex flex-col items-center gap-4 py-6">

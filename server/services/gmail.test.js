@@ -6,7 +6,7 @@ const { isLikelyJobEmail, extractTextFromPayload } = __test__
 describe('isLikelyJobEmail', () => {
   it('keeps likely application emails', () => {
     const email = {
-      from: 'ANZ Careers <noreply@careers.anz.com>',
+      from: 'Example Careers <noreply@careers.example.com>',
       subject: 'Your application update',
       snippet: 'Thank you for your application',
     }
@@ -24,8 +24,8 @@ describe('isLikelyJobEmail', () => {
 
   it('keeps offer emails framed as engagement agreements', () => {
     const email = {
-      from: 'JDN Tuition <people@jdntuition.com.au>',
-      subject: 'JDN Tuition Tutor Engagement Agreement – please review & sign (Ziqi He)',
+      from: 'Tutor Co <people@tutorco.example>',
+      subject: 'Tutor Co Tutor Engagement Agreement – please review & sign (Candidate)',
       snippet: 'Attached is your Tutor Engagement Agreement. Once your agreement is signed, we will begin your onboarding process.',
     }
     expect(isLikelyJobEmail(email)).toBe(true)
@@ -63,6 +63,15 @@ describe('isLikelyJobEmail', () => {
       from: 'Growth Team <hello@randomstartup.ai>',
       subject: 'Special offer just for you',
       snippet: 'Join our newsletter for product updates and discounts.',
+    }
+    expect(isLikelyJobEmail(email)).toBe(false)
+  })
+
+  it('filters LinkedIn Premium marketing blasts', () => {
+    const email = {
+      from: 'LinkedIn <linkedin@em.linkedin.com>',
+      subject: 'Candidate, enjoy 50% off LinkedIn Premium for 2 months',
+      snippet: 'Limited-time offer for Premium features.',
     }
     expect(isLikelyJobEmail(email)).toBe(false)
   })

@@ -82,6 +82,18 @@ const STAGE_ORDER = {
 
 function detectStage(subject, snippet) {
   const text = `${subject} ${snippet}`
+  const likelyMarketingOffer = /\boffer\b/i.test(text) && /(linkedin premium|discount|% off|save\s+\d+%|months?\s+of\s+premium|newsletter)/i.test(text)
+  if (likelyMarketingOffer) return { stage: 'Applied', confidence: 'low' }
+
+  const hasAssessmentSignal = /online assessment|online assessments|assessment invitation|complete your online assessments|complete.*assessment|hackerrank|codility|pymetrics|hirevue|korn ferry/i.test(text)
+  const hasInterviewSignal = /video interview|phone interview|telephone interview|interview invitation|invited.*interview|schedule.*interview|interview.*schedule/i.test(text)
+  const isAssessmentLead = /assessment invitation|next steps:\s*complete your online assessments|complete your online assessments|round\s*\d+/i.test(text)
+
+  // Avoid prematurely upgrading OA invitation emails to interview stage.
+  if (hasAssessmentSignal && (!hasInterviewSignal || isAssessmentLead)) {
+    return { stage: 'Online Assessment', confidence: 'high' }
+  }
+
   for (const { stage, patterns } of STAGE_RULES) {
     if (patterns.some(p => p.test(text))) return { stage, confidence: 'high' }
   }
@@ -90,6 +102,39 @@ function detectStage(subject, snippet) {
   if (/\boffer\b/i.test(text)) return { stage: 'Offer', confidence: 'medium' }
   if (/\bapplication\b/i.test(text)) return { stage: 'Applied', confidence: 'medium' }
   return { stage: 'Applied', confidence: 'low' }
+}
+
+function cleanRoleText(rawRole = '') {
+  let role = rawRole
+    .replace(/^reminder[:\s-]*/i, '')
+    .replace(/^interview\s+complete\s*[-–—:]?.*$/i, '')
+    .replace(/\bJR[-_\s]?\d+\b/gi, '') // remove req IDs like JR-10164745
+    .replace(/\([^)]*\)/g, '') // drop bracketed qualifiers for stable grouping
+    .replace(/\binterview\s+with\s+[A-Za-z][A-Za-z0-9&.\- ]{1,30}$/i, '')
+    .replace(/\s+at\s+[A-Za-z][A-Za-z0-9&.\- ]{1,30}$/i, '')
+    .replace(/^application\s+outcome\s*[-–—:]?\s*/i, '')
+    .replace(/^(our|the)\s+/i, '')
+    .replace(/\b(application\s+(?:received|outcome|update|status)|thanks?\s+for\s+(?:your\s+)?application)\b/gi, '')
+    .replace(/\b(role|position)\b$/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+  return role
+}
+
+function cleanCompanyText(raw = '') {
+  return String(raw || '')
+    .replace(/^@+/, '')
+    .replace(/\b(no[\s.-]?reply|noreply|notification|notifications|unsubscribe)\b/gi, '')
+    .replace(/\b(application\s+outcome|application\s+update|application\s+received)\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+function isNoisyRole(role = '') {
+  const r = cleanRoleText(role).toLowerCase()
+  if (!r) return true
+  if (r.length < 6) return true
+  return /^(application|application outcome|application update|thank you|thanks|job|email|mail|reminder)$/i.test(r)
 }
 
 // ── Due date extraction ──────────────────────────────────────────────────────
@@ -164,6 +209,7 @@ function parseRelativeDeadline(text, emailDate) {
   if (isNaN(base.getTime())) return null
 
   const patterns = [
+    /\byou(?:\s+only)?\s+have\s+(\d+)\s*(hours?|days?)/i,             // "you only have 72 hours"
     /\byou(?:'ll)?\s+have\s+(\d+)\s*(hours?|days?)/i,               // "you'll have 72 hours"
     /\b(\d+)\s*(hours?|days?)\s+to\s+(?:complete|respond|access|finish|submit)/i, // "72 hours to complete"
     /(?:complete|submit|respond|access).{0,25}within\s+(\d+)\s*(hours?|days?)/i,  // "complete within 48 hours"
@@ -283,20 +329,20 @@ const ATS_DOMAIN_PARTS = new Set([
   'gradweb', 'gradweb1', 'weareamberjack', 'hirevue', 'pymetrics', 'shl', 'fusiongc',
   'hackerrank', 'codility', 'cut', 'aon', 'korn', 'kornferry', 'criteriacorp',
   'hiredscore', 'vervoe', 'bamboohr', 'recruitee', 'jobvite', 'successfactors',
-  'applytojob', 'recruitcrm', 'seek', 'linkedin', 'indeed', 'talent', 'myworkdayjobs',
+  'applytojob', 'recruitcrm', 'seek', 'linkedin', 'indeed', 'talent', 'myworkdayjobs', 'myworkday',
 ])
 
 const GENERIC_COMPANY_NAMES = new Set([
   'your', 'you', 'team', 'talent team', 'hiring team', 'recruitment team',
-  'careers', 'notifications', 'no-reply', 'noreply', 'info',
+  'careers', 'notifications', 'no-reply', 'noreply', 'info', 'online', 'reminder',
+  'mail', 'email', 'job', 'application', 'application outcome', 'workday',
 ])
 
 const COMPANY_ALIAS_RULES = [
   { pattern: /\b(cba|commbank|commonwealth\s*bank(?:\s*group)?)\b/i, canonical: 'Commonwealth Bank' },
-  { pattern: /\bnab\b|national\s*australia\s*bank/i, canonical: 'NAB' },
-  { pattern: /\banz\b|australia\s*and\s*new\s*zealand\s*bank/i, canonical: 'ANZ' },
+  { pattern: /\bexamplebanka\b|example bank a/i, canonical: 'Example Bank A' },
+  { pattern: /\bexamplebankb\b|example bank b/i, canonical: 'Example Bank B' },
   { pattern: /\bseek\b/i, canonical: 'SEEK' },
-  { pattern: /\bfivecast\b/i, canonical: 'Fivecast' },
 ]
 
 function canonicalizeCompany(name) {
@@ -309,7 +355,7 @@ function canonicalizeCompany(name) {
 
 function sanitiseCompanyName(raw) {
   if (!raw) return null
-  let name = raw
+  let name = cleanCompanyText(raw)
     .replace(/^["'\s]+|["'\s]+$/g, '')
     .replace(/<.*?>/g, '')
     .replace(/\b(no[\s.-]?reply|noreply|notifications?)\b/gi, '')
@@ -322,37 +368,72 @@ function sanitiseCompanyName(raw) {
   const low = name.toLowerCase()
   if (GENERIC_COMPANY_NAMES.has(low)) return null
   if (/^[^@\s]+@[^@\s]+$/.test(name)) return null
+  if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(name)) return null // raw domain-like label
   if (name.length < 2) return null
   return canonicalizeCompany(name)
+}
+
+function inferCompanyFromSubject(subject = '') {
+  const s = subject.trim()
+  const hiring = s.match(/^([A-Za-z][A-Za-z0-9&.\- ]{2,50}?)\s+is\s+hiring\b/i)
+  if (hiring) return sanitiseCompanyName(hiring[1])
+  const roleAt = s.match(/\b(?:for|with|at)\s+([A-Za-z][A-Za-z0-9&.\- ]{2,40})(?:\s*[-|:,(]|\s*$)/i)
+  if (roleAt) return sanitiseCompanyName(roleAt[1])
+  return null
 }
 
 function extractSubjectCompany(subject) {
   if (!subject) return null
   const s = subject.replace(/^\d{4}\s+/, '') // strip leading year
 
-  // "NEXTDC - Your Feedback Report", "Company: Application update"
+  // "<Company> - Your Feedback Report", "<Company>: Application update"
   const prefixMatch = s.match(/^(.{2,40}?)\s*[-|:]\s*(?:your|application|feedback|online|video|interview|assessment|graduate|campus)/i)
-  if (prefixMatch) return sanitiseCompanyName(prefixMatch[1])
+  if (prefixMatch) {
+    const c = sanitiseCompanyName(prefixMatch[1])
+    if (c) return c
+  }
 
   // "Citadel's Campus 27 - Australia Software Engineering | Intern role"
   const possessiveProgram = s.match(/^([A-Za-z][A-Za-z0-9&.\s]{1,30})'?s\s+(?:campus|graduate|internship|intern)/i)
-  if (possessiveProgram) return sanitiseCompanyName(possessiveProgram[1])
+  if (possessiveProgram) {
+    const c = sanitiseCompanyName(possessiveProgram[1])
+    if (c) return c
+  }
 
   // "COMPANY Graduate Program", "COMPANY Internship Program"
   const programMatch = s.match(/^(.{3,40}?)\s+(?:graduate\s+program|internship\s+program|graduate\s+scheme|early\s+career\s+program)/i)
-  if (programMatch) return sanitiseCompanyName(programMatch[1])
+  if (programMatch) {
+    const c = sanitiseCompanyName(programMatch[1])
+    if (c) return c
+  }
 
-  // "Interview with Telstra", "Assessment with ANZ"
+  // "Interview with <Company>", "Assessment with <Company>"
   const withMatch = subject.match(/(?:interview|assessment|offer)\s+with\s+([A-Za-z][A-Za-z\s&.]{1,25}?)(?:\s*[-–,]|\s*$)/i)
-  if (withMatch) return sanitiseCompanyName(withMatch[1])
+  if (withMatch) {
+    const c = sanitiseCompanyName(withMatch[1])
+    if (c) return c
+  }
 
-  // "Application Outcome - 2026 Graduate ... at Fivecast"
+  // "Application Outcome - 2026 Graduate ... at <Company>"
   const atMatch = s.match(/\bat\s+([A-Za-z][A-Za-z0-9&.\- ]{1,35}?)(?:\s*[-|:,(]|\s*$)/i)
-  if (atMatch) return sanitiseCompanyName(atMatch[1])
+  if (atMatch) {
+    const c = sanitiseCompanyName(atMatch[1])
+    if (c) return c
+  }
 
-  // "NAB Feedback Report", "ANZ Online Assessment" — short acronym/name before action word
+  // "Next Steps ... for the NBN Graduate Program"
+  const forProgramMatch = s.match(/\bfor\s+(?:the\s+)?([A-Za-z][A-Za-z0-9&.\- ]{1,28}?)\s+(?:graduate|intern|program|programme|role|position)\b/i)
+  if (forProgramMatch) {
+    const c = sanitiseCompanyName(forProgramMatch[1])
+    if (c) return c
+  }
+
+  // "<ABC> Feedback Report", "<ABC> Online Assessment" — short acronym/name before action word
   const headMatch = s.match(/^([A-Z]{2,10})\s+(?:feedback|online|video|interview|assessment|offer|application|early)/i)
-  if (headMatch) return sanitiseCompanyName(headMatch[1])
+  if (headMatch) {
+    const c = sanitiseCompanyName(headMatch[1])
+    if (c) return c
+  }
 
   return null
 }
@@ -455,17 +536,24 @@ function extractRole(subject, company, bodyText = '') {
     return { role: roleLabel[1].trim().replace(/\s+/g, ' ').slice(0, 100), roleSource: 'explicit' }
   }
 
-  // "applying to the 2027 Telstra Graduate Program" style
+  // "applying to the 2027 <Company> Graduate Program" style
   const applyMatch = fullText.match(/(?:applying\s+to\s+(?:the\s+)?|applied\s+for\s+(?:the\s+)?|your\s+application\s+(?:for|to)\s+(?:the\s+)?)(\d{0,5}\s*[A-Z][^.]{4,80}?(?:program|programme|pathway|stream|position|role|internship))/i)
   if (applyMatch) {
-    const cleaned = applyMatch[1].trim().replace(/\s+/g, ' ').replace(/^(our|the)\s+/i, '').trim()
+    const cleaned = cleanRoleText(applyMatch[1].trim().replace(/\s+/g, ' '))
     return { role: cleaned.slice(0, 100), roleSource: 'explicit' }
+  }
+
+  // "apply for the JR-10164745 2027 Graduate Program - Software Engineering role"
+  const applyForRoleMatch = fullText.match(/apply(?:ing)?\s+for\s+(?:the\s+)?([A-Za-z0-9\- ]{4,140}?(?:program|programme|pathway|stream|position|role|internship))/i)
+  if (applyForRoleMatch) {
+    const cleaned = cleanRoleText(applyForRoleMatch[1].trim().replace(/\s+/g, ' '))
+    if (cleaned) return { role: cleaned.slice(0, 100), roleSource: 'explicit' }
   }
 
   // "received your application for our 2026 Graduate Software Engineer role"
   const receivedForOurMatch = fullText.match(/(?:received|review(?:ed|ing)?).{0,40}application\s+for\s+(?:our|the)\s+([A-Za-z0-9][^.]{4,90}?(?:program|programme|pathway|stream|position|role|internship))/i)
   if (receivedForOurMatch) {
-    const cleaned = receivedForOurMatch[1].trim().replace(/\s+/g, ' ').replace(/^(our|the)\s+/i, '').trim()
+    const cleaned = cleanRoleText(receivedForOurMatch[1].trim().replace(/\s+/g, ' '))
     return { role: cleaned.slice(0, 100), roleSource: 'explicit' }
   }
 
@@ -483,11 +571,8 @@ function extractRole(subject, company, bodyText = '') {
   // Strip trailing stage noise words that survive the split
   role = role
     .replace(/\s*[-–—:]\s*(?:online\s+assessment|video\s+interview|assessment\s+cent(?:re|er)?|phone\s+interview|interview\s+invitation|application\s+(?:update|status)|next\s+steps?|offer|congratulations?|unsuccessful|rejected?)\s*$/i, '')
-    .replace(/^application\s+outcome\s*[-–—:]?\s*/i, '')
     .trim()
-
-  // Strip trailing company marker in subjects like "... at Fivecast"
-  role = role.replace(/\s+at\s+[A-Za-z][A-Za-z0-9&.\- ]{1,30}$/i, '').trim()
+  role = cleanRoleText(role)
 
   // Remove company name prefix to leave just the program/role name
   if (company) {
@@ -537,7 +622,7 @@ function matchToApplication(company, applications, role = '') {
     }
   }
 
-  // 2. Company-only match (includes substring — handles "Telstra Early" ↔ "Telstra")
+  // 2. Company-only match (includes substring — handles "Company Early" ↔ "Company")
   for (const app of applications) {
     const a = normaliseStr(app.company)
     if (a.includes(c) || c.includes(a)) return app.id
@@ -561,14 +646,12 @@ function matchToApplication(company, applications, role = '') {
 
 function groupKey(appId, company, role) {
   if (appId) return appId
-  const cn = normaliseStr(company ?? 'unknown')
-  const cleanedRole = (role ?? '')
-    .replace(/^application\s+outcome\s*[-–—:]?\s*/i, '')
-    .replace(/^(our|the)\s+/i, '')
-    .replace(/\s+at\s+[A-Za-z][A-Za-z0-9&.\- ]{1,30}$/i, '')
-    .replace(/\b(application\s+(?:received|outcome|update|status)|thanks?\s+for\s+(?:your\s+)?application)\b/gi, '')
-    .replace(/\b(role|position)\b$/i, '')
-    .trim()
+  const cleanCompany = sanitiseCompanyName(company ?? '') ?? (company ?? 'unknown')
+  const cn = normaliseStr(cleanCompany ?? 'unknown')
+  const cleanedRole = cleanRoleText(role ?? '')
+  if (!cleanedRole || isNoisyRole(cleanedRole) || /^(?:\d{4}\s+)?graduate\s+program$/i.test(cleanedRole)) {
+    return `company:${cn}`
+  }
   const rn = normaliseStr(cleanedRole)
   return rn ? `${cn}:${rn}` : `company:${cn}`
 }
@@ -591,6 +674,47 @@ function mergeIntoGroup(existing, incoming) {
   else if (incoming.assessmentStatus === 'pending' && !existing.assessmentStatus) existing.assessmentStatus = 'pending'
   // Accumulate source emails
   existing.sourceEmails.push(incoming.sourceEmails[0])
+}
+
+function consolidateGroups(values) {
+  const byCompanyRole = new Map()
+  for (const item of values) {
+    const companyKey = normaliseStr(item.company ?? '')
+    const roleKey = isNoisyRole(item.role ?? '') ? '' : normaliseStr(cleanRoleText(item.role ?? ''))
+    const key = `${companyKey}:${roleKey}`
+    if (!byCompanyRole.has(key)) {
+      byCompanyRole.set(key, item)
+    } else {
+      mergeIntoGroup(byCompanyRole.get(key), item)
+      byCompanyRole.get(key).hasFresh = byCompanyRole.get(key).hasFresh || item.hasFresh
+    }
+  }
+
+  const grouped = Array.from(byCompanyRole.values())
+  const byCompany = new Map()
+  for (const item of grouped) {
+    const cKey = normaliseStr(item.company ?? '')
+    if (!byCompany.has(cKey)) byCompany.set(cKey, [])
+    byCompany.get(cKey).push(item)
+  }
+
+  for (const items of byCompany.values()) {
+    const terminal = items.find(i => i.detectedStage === 'Rejected' || i.detectedStage === 'Offer')
+    if (!terminal) continue
+    for (const item of items) {
+      if (item === terminal) continue
+      const sameRoleFamily =
+        (isNoisyRole(item.role ?? '') && isNoisyRole(terminal.role ?? '')) ||
+        normaliseStr(cleanRoleText(item.role ?? '')) === normaliseStr(cleanRoleText(terminal.role ?? ''))
+      if (sameRoleFamily) {
+        mergeIntoGroup(terminal, item)
+        terminal.hasFresh = terminal.hasFresh || item.hasFresh
+        item.__drop = true
+      }
+    }
+  }
+
+  return grouped.filter(i => !i.__drop)
 }
 
 // ── Assessment / interview status ────────────────────────────────────────────
@@ -661,9 +785,10 @@ export async function classifyEmails(emails, applications, knownIds = [], userTi
     const isAssessmentStage = stage === 'Online Assessment' || stage === 'Video Interview'
     const assessmentStatus = isAssessmentStage ? detectAssessmentStatus(email.subject, bodyOrSnippet) : null
 
+    const resolvedCompany = company ?? inferCompanyFromSubject(email.subject) ?? 'Unknown'
     const result = {
       appId,
-      company: company ?? email.from,
+      company: resolvedCompany,
       role,
       roleSource,
       detectedStage: stage,
@@ -680,7 +805,7 @@ export async function classifyEmails(emails, applications, knownIds = [], userTi
       }],
     }
 
-    const key = groupKey(appId, company, role)
+    const key = groupKey(appId, resolvedCompany, role)
 
     if (groups.has(key)) {
       const existing = groups.get(key)
@@ -690,12 +815,12 @@ export async function classifyEmails(emails, applications, knownIds = [], userTi
       groups.set(key, { ...result, hasFresh: !isKnown })
     }
 
-    console.log(`[classifier] ${company ?? '?'} → ${stage} (${confidence})${dueDate ? ` due:${dueDate}` : ''} | "${email.subject}"`)
+    console.log(`[classifier] ${resolvedCompany} → ${stage} (${confidence})${dueDate ? ` due:${dueDate}` : ''} | "${email.subject}"`)
   }
 
-  const results = Array.from(groups.values())
+  const results = consolidateGroups(Array.from(groups.values()))
     .filter(r => r.hasFresh)
-    .map(({ hasFresh, ...rest }) => rest)
+    .map(({ hasFresh, __drop, ...rest }) => rest)
 
   return { results, skippedKnown }
 }

@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { filterApplications } from './filterApplications'
 
 const apps = [
-  { id: '1', company: 'Telstra', role: 'Graduate Program', stage: 'Applied' },
-  { id: '2', company: 'ANZ', role: 'Technology Internship', stage: 'Online Assessment' },
-  { id: '3', company: 'NAB', role: 'Data Analyst', stage: 'Video Interview' },
+  { id: '1', company: 'Company One', role: 'Graduate Program', stage: 'Applied' },
+  { id: '2', company: 'Company Two', role: 'Technology Internship', stage: 'Online Assessment' },
+  { id: '3', company: 'Company Three', role: 'Data Analyst', stage: 'Video Interview' },
 ]
 
 describe('filterApplications', () => {

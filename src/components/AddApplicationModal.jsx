@@ -94,7 +94,7 @@ export default function AddApplicationModal({ onClose, onAdd, initial }) {
                 style={{ ...inputStyle, borderColor: errors.company ? '#ef4444' : '#2a2a38' }}
                 value={form.company}
                 onChange={e => set('company', e.target.value)}
-                placeholder="e.g. Atlassian"
+                placeholder="e.g. Example Company"
                 autoFocus
                 onFocus={borderFocus}
                 onBlur={borderBlur}

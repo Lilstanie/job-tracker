@@ -20,10 +20,10 @@ const ATS_DOMAINS = [
   'recruitcrm.io',
   // Assessment & psychometric platforms
   'weareamberjack.com',
-  'weareamberjack.com.au',  // NAB / CBA / Westpac OA platform
+  'weareamberjack.com.au',  // common OA platform
   'gradweb.co.uk',
   'gradweb1.co.uk',         // GradWeb feedback reports (UK/AU grads)
-  'fusiongc.com.au',        // Fusion Graduate Centre (NAB)
+  'fusiongc.com.au',        // Fusion Graduate Centre
   'hirevue.com',
   'pymetrics.com',
   'pymetrics.ai',
@@ -128,6 +128,7 @@ const BLOCKED_SENDER_PATTERNS = [
   /career\s*alerts?/i,
   /noreply@linkedin\.com/i,
   /jobs-noreply@linkedin\.com/i,
+  /linkedin@em\.linkedin\.com/i, // LinkedIn Premium / marketing blasts
   /trip\.com/i,
 ]
 
@@ -144,6 +145,13 @@ const SCORE_THRESHOLD = 3
 // Pre-filter: multi-signal scoring (robust to unseen domains).
 function isLikelyJobEmail(email, verbose = false) {
   const log = verbose ? (...a) => console.log(...a) : () => {}
+  const fromLower = email.from.toLowerCase()
+  const subjectLower = email.subject.toLowerCase()
+
+  if (fromLower.includes('linkedin@em.linkedin.com') && /premium|offer|months?\b|discount/i.test(subjectLower)) {
+    log(`  ✗ LINKEDIN_MARKETING: [${email.from}] "${email.subject}"`)
+    return false
+  }
 
   if (BLOCKED_SENDER_PATTERNS.some(p => p.test(email.from))) {
     log(`  ✗ BLOCKED_SENDER: [${email.from}] "${email.subject}"`)
@@ -152,14 +160,13 @@ function isLikelyJobEmail(email, verbose = false) {
 
   let score = 0
   const reasons = []
-  const fromLower = email.from.toLowerCase()
   const matchedDomain = ATS_DOMAINS.find(d => fromLower.includes(d))
   if (matchedDomain) {
     score += 3
     reasons.push(`ATS_DOMAIN(${matchedDomain}) +3`)
   }
 
-  const subject = email.subject.toLowerCase()
+  const subject = subjectLower
   const snippet = email.snippet.toLowerCase()
 
   const matchedSubject = SUBJECT_SIGNALS.find(s => subject.includes(s))

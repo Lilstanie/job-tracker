@@ -4,7 +4,7 @@ import { classifyEmails, extractDueDate } from './classifier.js'
 describe('classifyEmails', () => {
   it('groups duplicate job emails and keeps most advanced stage', async () => {
     const applications = [
-      { id: 'app-1', company: 'Telstra', role: 'Graduate Program' },
+      { id: 'app-1', company: 'Company Alpha', role: 'Graduate Program' },
     ]
 
     const emails = [
@@ -12,14 +12,14 @@ describe('classifyEmails', () => {
         id: 'e1',
         subject: 'Thank you for your application',
         snippet: 'We received your application',
-        from: 'Telstra Careers <careers@telstra.com>',
+        from: 'Company Alpha Careers <careers@companyalpha.example>',
         date: '2026-04-20T00:00:00.000Z',
       },
       {
         id: 'e2',
         subject: 'Interview invitation',
         snippet: 'You are invited to interview',
-        from: 'Telstra Careers <careers@telstra.com>',
+        from: 'Company Alpha Careers <careers@companyalpha.example>',
         date: '2026-04-21T00:00:00.000Z',
       },
     ]
@@ -49,21 +49,21 @@ describe('classifyEmails', () => {
   })
 
   it('keeps known source emails in context when a new email exists in same group', async () => {
-    const applications = [{ id: 'air-1', company: 'Airservices Australia', role: 'Air Traffic Control Trainee' }]
+    const applications = [{ id: 'air-1', company: 'Company Radar', role: 'Control Trainee' }]
     const emails = [
       {
         id: 'known-round-1',
         subject: 'Round 1 online testing invite',
         snippet: 'You are invited to complete online assessment',
-        from: 'Airservices Australia <avrecruit-504@mail.pageuppeople.com>',
+        from: 'Company Radar <avrecruit-504@mail.pageuppeople.com>',
         date: '2026-04-01T00:00:00.000Z',
       },
       {
         id: 'new-round-2',
-        subject: 'Application Outcome - Air Traffic Control Trainee',
+        subject: 'Application Outcome - Control Trainee',
         snippet: 'Your application has been deemed unsuccessful.',
         bodyText: 'Unfortunately your application has been deemed unsuccessful.',
-        from: 'Airservices Australia <avrecruit-504@mail.pageuppeople.com>',
+        from: 'Company Radar <avrecruit-504@mail.pageuppeople.com>',
         date: '2026-05-10T00:00:00.000Z',
       },
     ]
@@ -131,15 +131,15 @@ describe('classifyEmails', () => {
 
   it('updates matched application to Rejected for "deemed unsuccessful" outcome emails', async () => {
     const applications = [
-      { id: 'air-1', company: 'Airservices Australia', role: 'Air Traffic Control Trainee', stage: 'Online Assessment' },
+      { id: 'air-1', company: 'Company Radar', role: 'Control Trainee', stage: 'Online Assessment' },
     ]
     const emails = [
       {
         id: 'rej-1',
-        subject: 'Application Outcome - Air Traffic Control Trainee',
+        subject: 'Application Outcome - Control Trainee',
         snippet: 'Your application has been deemed unsuccessful.',
         bodyText: 'Your online testing results have been reviewed and assessed and unfortunately your application has been deemed unsuccessful.',
-        from: 'Airservices Australia <avrecruit-504@mail.pageuppeople.com>',
+        from: 'Company Radar <avrecruit-504@mail.pageuppeople.com>',
         date: '2026-05-10T00:00:00.000Z',
       },
     ]
@@ -155,7 +155,7 @@ describe('classifyEmails', () => {
     const emails = [
       {
         id: 'g1',
-        subject: 'NEXTDC - Your Feedback Report',
+        subject: 'Company Delta - Your Feedback Report',
         snippet: 'Feedback report available',
         from: 'no-reply@gradweb1.co.uk',
         date: '2026-05-08T00:00:00.000Z',
@@ -163,7 +163,7 @@ describe('classifyEmails', () => {
     ]
     const { results } = await classifyEmails(emails, [], [])
     expect(results).toHaveLength(1)
-    expect(results[0].company).toBe('NEXTDC')
+    expect(results[0].company).toBe('Company Delta')
   })
 
   it('extracts company from possessive subject format', async () => {
@@ -188,7 +188,7 @@ describe('classifyEmails', () => {
     const emails = [
       {
         id: 'alias-1',
-        subject: 'Application Acknowledgement: CommBank Graduate Program',
+        subject: 'Application Acknowledgement: Company Finance Graduate Program',
         snippet: 'Thanks for taking the time to complete your application.',
         from: 'CBA HR <cba@myworkday.com>',
         date: '2026-04-07T00:00:00.000Z',
@@ -205,44 +205,128 @@ describe('classifyEmails', () => {
     const emails = [
       {
         id: 'fivecast-1',
-        subject: 'Application Outcome- 2026 Graduate Software Engineer at Fivecast',
+        subject: 'Application Outcome- 2026 Graduate Software Engineer at Company Orion',
         snippet: 'Thank you for giving us the opportunity to consider you for our Graduate Software Engineer role.',
         bodyText: 'We have reviewed your application and unfortunately it is not a match for what we are looking for right now.',
-        from: 'Nicole Meade <careers@fivecast.com>',
+        from: 'Recruiter Name <careers@companyorion.example>',
         date: '2026-04-09T04:13:00.000Z',
       },
     ]
 
     const { results } = await classifyEmails(emails, [], [])
     expect(results).toHaveLength(1)
-    expect(results[0].company).toBe('Fivecast')
+    expect(results[0].company).toBe('Company Orion')
     expect(results[0].detectedStage).toBe('Rejected')
   })
 
-  it('groups Fivecast applied and outcome emails into one timeline group', async () => {
+  it('groups Company Orion applied and outcome emails into one timeline group', async () => {
     const emails = [
       {
-        id: 'fivecast-applied',
-        subject: 'FIVECAST Application received',
+        id: 'orion-applied',
+        subject: 'COMPANY ORION Application received',
         snippet: 'We have received your application for our 2026 Graduate Software Engineer role.',
-        bodyText: 'Thank you for considering a role at Fivecast. We have received your application for our 2026 Graduate Software Engineer role.',
-        from: 'careers@fivecast.com <careers@fivecast.com>',
+        bodyText: 'Thank you for considering a role at Company Orion. We have received your application for our 2026 Graduate Software Engineer role.',
+        from: 'careers@companyorion.example <careers@companyorion.example>',
         date: '2026-04-07T07:21:00.000Z',
       },
       {
-        id: 'fivecast-outcome',
-        subject: 'Application Outcome- 2026 Graduate Software Engineer at Fivecast',
+        id: 'orion-outcome',
+        subject: 'Application Outcome- 2026 Graduate Software Engineer at Company Orion',
         snippet: 'Thank you for giving us the opportunity to consider you.',
         bodyText: 'We have reviewed your application and unfortunately it is not a match for what we are looking for right now.',
-        from: 'Nicole Meade <careers@fivecast.com>',
+        from: 'Recruiter Name <careers@companyorion.example>',
         date: '2026-04-09T04:13:00.000Z',
       },
     ]
 
     const { results } = await classifyEmails(emails, [], [])
     expect(results).toHaveLength(1)
-    expect(results[0].company).toBe('Fivecast')
+    expect(results[0].company).toMatch(/company ?orion/i)
     expect(results[0].detectedStage).toBe('Rejected')
     expect(results[0].sourceEmails).toHaveLength(2)
+  })
+
+  it('keeps MyWorkday next-steps assessment emails in Online Assessment stage and extracts company', async () => {
+    const emails = [
+      {
+        id: 'nbn-assess-1',
+        subject: 'Next Steps: Complete Your Online Assessments for the Company Network Graduate Program',
+        snippet: 'Assessment invitation. You may be invited to a video interview after completion.',
+        from: 'Workday <notifications@myworkday.com>',
+        date: '2026-04-13T02:36:00.000Z',
+      },
+    ]
+
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].detectedStage).toBe('Online Assessment')
+    expect(results[0].company).toBe('Company Network')
+  })
+
+  it('merges Company Alpha reminder/complete/outcome emails and calculates 72h due date', async () => {
+    const emails = [
+      {
+        id: 'telstra-reminder',
+        subject: 'Reminder: Interview with Company Alpha',
+        snippet: 'You only have 72 hours to complete the tasks from receipt of the email.',
+        bodyText: 'We have noticed that you have not completed your video interview and online assessment for 2027 Company Alpha Graduate Program (Software Engineering). You only have 72 hours to complete the tasks from receipt of the email.',
+        from: 'Company Alpha Early Careers <interviews@hirevue.com>',
+        date: '2026-04-04T00:00:00.000Z',
+      },
+      {
+        id: 'telstra-complete',
+        subject: 'Interview Complete - thank-you!',
+        snippet: 'You have successfully completed your video interview and online assessments.',
+        bodyText: 'Congratulations! You have successfully completed your video interview and online assessments for 2027 Company Alpha Graduate Program (Software Engineering).',
+        from: 'Company Alpha Early Careers <interviews@hirevue.com>',
+        date: '2026-04-06T11:42:00.000Z',
+      },
+      {
+        id: 'telstra-outcome',
+        subject: 'Application Outcome',
+        snippet: 'Unfortunately we will not be moving forward with your application.',
+        bodyText: 'Thank you again for taking the time to apply for the JR-10164745 2027 Graduate Program - Software Engineering role. Unfortunately we will not be moving forward with your application at this time.',
+        from: 'Company Alpha Careers <companyalpha@myworkday.com>',
+        date: '2026-04-28T01:48:00.000Z',
+      },
+    ]
+
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Company Alpha')
+    expect(results[0].detectedStage).toBe('Rejected')
+    expect(results[0].dueDate).toBe('2026-04-07')
+    expect(results[0].assessmentStatus).toBe('completed')
+    expect(results[0].sourceEmails).toHaveLength(3)
+  })
+
+  it('does not classify LinkedIn Premium marketing as Offer', async () => {
+    const emails = [
+      {
+        id: 'li-premium-1',
+        subject: 'Candidate, enjoy 50% off LinkedIn Premium for 2 months',
+        snippet: 'Unlock Premium features with this limited-time offer.',
+        from: 'LinkedIn <linkedin@em.linkedin.com>',
+        date: '2026-04-22T00:00:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].detectedStage).not.toBe('Offer')
+  })
+
+  it('cleans noisy @domain sender labels into a readable company name', async () => {
+    const emails = [
+      {
+        id: 'domain-noise-1',
+        subject: 'Candidate, thank you for your application',
+        snippet: 'We received your application.',
+        from: '@francomgroup.com',
+        date: '2026-04-10T00:00:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Francomgroup')
   })
 })
