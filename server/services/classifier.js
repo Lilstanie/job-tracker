@@ -21,6 +21,8 @@ const STAGE_RULES = [
       /will not be moving forward/i, /not.*progressing/i, /not been selected/i,
       /unfortunately.*application/i, /application.*unsuccessful/i,
       /not.*proceed/i, /decided not to/i, /no longer.*consider/i,
+      /not a match for what we(?:'|’)re looking for/i,
+      /not a match for what we are looking for/i,
     ],
   },
   {
@@ -294,6 +296,7 @@ const COMPANY_ALIAS_RULES = [
   { pattern: /\bnab\b|national\s*australia\s*bank/i, canonical: 'NAB' },
   { pattern: /\banz\b|australia\s*and\s*new\s*zealand\s*bank/i, canonical: 'ANZ' },
   { pattern: /\bseek\b/i, canonical: 'SEEK' },
+  { pattern: /\bfivecast\b/i, canonical: 'Fivecast' },
 ]
 
 function canonicalizeCompany(name) {
@@ -343,11 +346,46 @@ function extractSubjectCompany(subject) {
   const withMatch = subject.match(/(?:interview|assessment|offer)\s+with\s+([A-Za-z][A-Za-z\s&.]{1,25}?)(?:\s*[-–,]|\s*$)/i)
   if (withMatch) return sanitiseCompanyName(withMatch[1])
 
+  // "Application Outcome - 2026 Graduate ... at Fivecast"
+  const atMatch = s.match(/\bat\s+([A-Za-z][A-Za-z0-9&.\- ]{1,35}?)(?:\s*[-|:,(]|\s*$)/i)
+  if (atMatch) return sanitiseCompanyName(atMatch[1])
+
   // "NAB Feedback Report", "ANZ Online Assessment" — short acronym/name before action word
   const headMatch = s.match(/^([A-Z]{2,10})\s+(?:feedback|online|video|interview|assessment|offer|application|early)/i)
   if (headMatch) return sanitiseCompanyName(headMatch[1])
 
   return null
+}
+
+function looksLikePersonName(name) {
+  if (!name) return false
+  const cleaned = name.replace(/[^A-Za-z\s'-]/g, ' ').replace(/\s+/g, ' ').trim()
+  const parts = cleaned.split(' ').filter(Boolean)
+  if (parts.length < 2 || parts.length > 3) return false
+  const allTitleCase = parts.every(p => /^[A-Z][a-z'-]+$/.test(p))
+  return allTitleCase
+}
+
+function looksLikeNonCompanyLabel(name) {
+  if (!name) return false
+  const n = name.toLowerCase()
+  if (/\b(application|outcome|role|position|internship|graduate|engineer|software)\b/.test(n)) return true
+  if (/\b(our|your)\b/.test(n)) return true
+  if (n.length > 40) return true
+  return false
+}
+
+function extractCompanyFromDomain(from) {
+  const emailMatch = from.match(/@([\w.-]+)/)
+  if (!emailMatch) return null
+  const parts = emailMatch[1].split('.')
+  const name = parts.find(p =>
+    !ATS_DOMAIN_PARTS.has(p.toLowerCase()) &&
+    !['com', 'au', 'co', 'uk', 'gov', 'edu', 'org', 'net'].includes(p.toLowerCase()) &&
+    p.length > 2
+  )
+  if (!name) return null
+  return sanitiseCompanyName(name.charAt(0).toUpperCase() + name.slice(1))
 }
 
 function extractCompany(from, subject = '', bodyText = '') {
@@ -358,6 +396,10 @@ function extractCompany(from, subject = '', bodyText = '') {
     const co = sanitiseCompanyName(seekBodyMatch[1].trim().replace(/\s+/g, ' '))
     if (co) return co
   }
+
+  // Subject signal is often cleaner than noisy sender labels.
+  const subjectName = extractSubjectCompany(subject)
+  if (subjectName) return subjectName
 
   // 1. Display name (most reliable when present)
   let displayName = null
@@ -371,31 +413,22 @@ function extractCompany(from, subject = '', bodyText = '') {
     if (clean && !ATS_DOMAIN_PARTS.has(clean.toLowerCase())) displayName = clean
   }
 
-  // Subject extraction (used as override for short acronym display names like "HRD", "TAL")
-  const subjectName = extractSubjectCompany(subject)
-
   if (displayName) {
-    // If display name is a short all-caps acronym (≤4 chars) and subject gives something richer, prefer subject
-    if (displayName.length <= 4 && subjectName && subjectName.length > displayName.length) return subjectName
+    // Prefer subject-derived employer name when display name looks like a person.
+    if (looksLikeNonCompanyLabel(displayName)) {
+      const domainName = extractCompanyFromDomain(from)
+      if (domainName) return domainName
+    }
     return displayName
   }
-  if (subjectName) return subjectName
 
   // 3. Email local-part hint: "nabearlycareertalent@..." → extract leading word before "early/careers/talent/jobs"
   const localMatch = from.match(/^[^@]*?([a-z]{2,8})(?:early|careers?|talent|jobs?|grads?|recruit)\b/i)
   if (localMatch) return sanitiseCompanyName(localMatch[1].toUpperCase())
 
   // 4. Email domain — skip ATS platform parts and generic TLDs
-  const emailMatch = from.match(/@([\w.-]+)/)
-  if (emailMatch) {
-    const parts = emailMatch[1].split('.')
-    const name = parts.find(p =>
-      !ATS_DOMAIN_PARTS.has(p.toLowerCase()) &&
-      !['com', 'au', 'co', 'uk', 'gov', 'edu', 'org', 'net'].includes(p.toLowerCase()) &&
-      p.length > 2
-    )
-    if (name) return sanitiseCompanyName(name.charAt(0).toUpperCase() + name.slice(1))
-  }
+  const domainName = extractCompanyFromDomain(from)
+  if (domainName) return domainName
 
   return null
 }
@@ -425,7 +458,15 @@ function extractRole(subject, company, bodyText = '') {
   // "applying to the 2027 Telstra Graduate Program" style
   const applyMatch = fullText.match(/(?:applying\s+to\s+(?:the\s+)?|applied\s+for\s+(?:the\s+)?|your\s+application\s+(?:for|to)\s+(?:the\s+)?)(\d{0,5}\s*[A-Z][^.]{4,80}?(?:program|programme|pathway|stream|position|role|internship))/i)
   if (applyMatch) {
-    return { role: applyMatch[1].trim().replace(/\s+/g, ' ').slice(0, 100), roleSource: 'explicit' }
+    const cleaned = applyMatch[1].trim().replace(/\s+/g, ' ').replace(/^(our|the)\s+/i, '').trim()
+    return { role: cleaned.slice(0, 100), roleSource: 'explicit' }
+  }
+
+  // "received your application for our 2026 Graduate Software Engineer role"
+  const receivedForOurMatch = fullText.match(/(?:received|review(?:ed|ing)?).{0,40}application\s+for\s+(?:our|the)\s+([A-Za-z0-9][^.]{4,90}?(?:program|programme|pathway|stream|position|role|internship))/i)
+  if (receivedForOurMatch) {
+    const cleaned = receivedForOurMatch[1].trim().replace(/\s+/g, ' ').replace(/^(our|the)\s+/i, '').trim()
+    return { role: cleaned.slice(0, 100), roleSource: 'explicit' }
   }
 
   // Subject-based: strip everything after common stage separators
@@ -442,7 +483,11 @@ function extractRole(subject, company, bodyText = '') {
   // Strip trailing stage noise words that survive the split
   role = role
     .replace(/\s*[-–—:]\s*(?:online\s+assessment|video\s+interview|assessment\s+cent(?:re|er)?|phone\s+interview|interview\s+invitation|application\s+(?:update|status)|next\s+steps?|offer|congratulations?|unsuccessful|rejected?)\s*$/i, '')
+    .replace(/^application\s+outcome\s*[-–—:]?\s*/i, '')
     .trim()
+
+  // Strip trailing company marker in subjects like "... at Fivecast"
+  role = role.replace(/\s+at\s+[A-Za-z][A-Za-z0-9&.\- ]{1,30}$/i, '').trim()
 
   // Remove company name prefix to leave just the program/role name
   if (company) {
@@ -517,7 +562,14 @@ function matchToApplication(company, applications, role = '') {
 function groupKey(appId, company, role) {
   if (appId) return appId
   const cn = normaliseStr(company ?? 'unknown')
-  const rn = normaliseStr(role ?? '')
+  const cleanedRole = (role ?? '')
+    .replace(/^application\s+outcome\s*[-–—:]?\s*/i, '')
+    .replace(/^(our|the)\s+/i, '')
+    .replace(/\s+at\s+[A-Za-z][A-Za-z0-9&.\- ]{1,30}$/i, '')
+    .replace(/\b(application\s+(?:received|outcome|update|status)|thanks?\s+for\s+(?:your\s+)?application)\b/gi, '')
+    .replace(/\b(role|position)\b$/i, '')
+    .trim()
+  const rn = normaliseStr(cleanedRole)
   return rn ? `${cn}:${rn}` : `company:${cn}`
 }
 

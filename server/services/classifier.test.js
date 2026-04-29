@@ -200,4 +200,49 @@ describe('classifyEmails', () => {
     expect(results[0].company).toBe('Commonwealth Bank')
     expect(results[0].appId).toBe('cba-1')
   })
+
+  it('prefers company from subject "at <Company>" over recruiter personal name', async () => {
+    const emails = [
+      {
+        id: 'fivecast-1',
+        subject: 'Application Outcome- 2026 Graduate Software Engineer at Fivecast',
+        snippet: 'Thank you for giving us the opportunity to consider you for our Graduate Software Engineer role.',
+        bodyText: 'We have reviewed your application and unfortunately it is not a match for what we are looking for right now.',
+        from: 'Nicole Meade <careers@fivecast.com>',
+        date: '2026-04-09T04:13:00.000Z',
+      },
+    ]
+
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Fivecast')
+    expect(results[0].detectedStage).toBe('Rejected')
+  })
+
+  it('groups Fivecast applied and outcome emails into one timeline group', async () => {
+    const emails = [
+      {
+        id: 'fivecast-applied',
+        subject: 'FIVECAST Application received',
+        snippet: 'We have received your application for our 2026 Graduate Software Engineer role.',
+        bodyText: 'Thank you for considering a role at Fivecast. We have received your application for our 2026 Graduate Software Engineer role.',
+        from: 'careers@fivecast.com <careers@fivecast.com>',
+        date: '2026-04-07T07:21:00.000Z',
+      },
+      {
+        id: 'fivecast-outcome',
+        subject: 'Application Outcome- 2026 Graduate Software Engineer at Fivecast',
+        snippet: 'Thank you for giving us the opportunity to consider you.',
+        bodyText: 'We have reviewed your application and unfortunately it is not a match for what we are looking for right now.',
+        from: 'Nicole Meade <careers@fivecast.com>',
+        date: '2026-04-09T04:13:00.000Z',
+      },
+    ]
+
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Fivecast')
+    expect(results[0].detectedStage).toBe('Rejected')
+    expect(results[0].sourceEmails).toHaveLength(2)
+  })
 })
