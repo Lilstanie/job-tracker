@@ -5,6 +5,7 @@ import { STAGE_COLORS } from '../data/mockData'
 const PROG = ['Applied', 'Online Assessment', 'Video Interview', 'Assessment Centre', 'Offer']
 const SHORT = ['Applied', 'OA', 'Interview', 'AC', 'Offer']
 const COLORS = ['#6b7280', '#3b82f6', '#6c63ff', '#a855f7', '#22c55e']
+const STALE_THRESHOLD_DAYS = 14
 
 function getMaxIdx(app) {
   let max = 0
@@ -164,6 +165,32 @@ function KPI({ label, value, sub, color = '#e2e2e8' }) {
   )
 }
 
+function ActionItem({ title, meta, urgency = 'normal' }) {
+  const tone = urgency === 'high'
+    ? { bg: '#ef444415', border: '#ef444460', text: '#f87171' }
+    : urgency === 'medium'
+      ? { bg: '#f59e0b15', border: '#f59e0b55', text: '#f59e0b' }
+      : { bg: '#3b82f615', border: '#3b82f655', text: '#60a5fa' }
+
+  return (
+    <div
+      className="rounded-lg px-3 py-2.5"
+      style={{ background: '#1e1e28', border: '1px solid #2a2a38' }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-sm font-medium leading-snug" style={{ color: '#e2e2e8' }}>{title}</p>
+        <span
+          className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full shrink-0"
+          style={{ background: tone.bg, border: `1px solid ${tone.border}`, color: tone.text }}
+        >
+          {urgency}
+        </span>
+      </div>
+      <p className="text-xs mt-1" style={{ color: '#6b6b84' }}>{meta}</p>
+    </div>
+  )
+}
+
 export default function PipelineView({ applications }) {
   const stats = useMemo(() => {
     const total = applications.length
@@ -193,7 +220,78 @@ export default function PipelineView({ applications }) {
       .filter(a => a.deadlineTs >= now && a.deadlineTs <= now + 14 * 86400000)
       .sort((a, b) => a.deadlineTs - b.deadlineTs)
 
-    return { total, reached, rejected, offers, responseRate, offerRate, stillApplied, oaPending, oaDone, viPending, viDone, upcoming }
+    const stageDurations = PROG.slice(0, -1).map(stage => {
+      const durations = applications
+        .map(a => {
+          const history = a.history || []
+          const idx = history.findIndex(h => h.stage === stage)
+          if (idx < 0) return null
+          const entered = new Date(history[idx].timestamp).getTime()
+          if (Number.isNaN(entered)) return null
+          const next = history[idx + 1]
+          const exited = next ? new Date(next.timestamp).getTime() : now
+          if (Number.isNaN(exited) || exited <= entered) return null
+          return (exited - entered) / 86400000
+        })
+        .filter(v => v !== null)
+
+      if (!durations.length) return { stage, avgDays: 0, sample: 0 }
+      const avgDays = durations.reduce((sum, d) => sum + d, 0) / durations.length
+      return { stage, avgDays, sample: durations.length }
+    })
+
+    const bottleneck = stageDurations.reduce((max, cur) => {
+      if (!max) return cur
+      return cur.avgDays > max.avgDays ? cur : max
+    }, null)
+
+    const staleApps = applications
+      .map(a => {
+        const history = a.history || []
+        const latest = history[history.length - 1]
+        const lastTs = latest?.timestamp ? new Date(latest.timestamp).getTime() : null
+        if (!lastTs || Number.isNaN(lastTs)) return null
+        const daysInStage = Math.floor((now - lastTs) / 86400000)
+        if (daysInStage < STALE_THRESHOLD_DAYS) return null
+        if (a.stage === 'Offer' || a.stage === 'Rejected') return null
+        return { ...a, daysInStage }
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.daysInStage - a.daysInStage)
+
+    const actionQueue = [
+      ...upcoming.slice(0, 3).map(a => ({
+        id: `deadline-${a.id}`,
+        urgency: Math.ceil((a.deadlineTs - now) / 86400000) <= 3 ? 'high' : 'medium',
+        title: `${a.company}: deadline approaching`,
+        meta: `${a.stage} · due ${formatDate(a.deadline)}`
+      })),
+      ...staleApps.slice(0, 3).map(a => ({
+        id: `stale-${a.id}`,
+        urgency: a.daysInStage >= 21 ? 'high' : 'medium',
+        title: `${a.company}: no stage movement`,
+        meta: `${a.stage} · stuck for ${a.daysInStage} days`
+      })),
+    ].slice(0, 6)
+
+    return {
+      total,
+      reached,
+      rejected,
+      offers,
+      responseRate,
+      offerRate,
+      stillApplied,
+      oaPending,
+      oaDone,
+      viPending,
+      viDone,
+      upcoming,
+      stageDurations,
+      bottleneck,
+      staleApps,
+      actionQueue,
+    }
   }, [applications])
 
   if (!stats) {
@@ -205,7 +303,24 @@ export default function PipelineView({ applications }) {
     )
   }
 
-  const { total, reached, rejected, offers, responseRate, offerRate, stillApplied, oaPending, oaDone, viPending, viDone, upcoming } = stats
+  const {
+    total,
+    reached,
+    rejected,
+    offers,
+    responseRate,
+    offerRate,
+    stillApplied,
+    oaPending,
+    oaDone,
+    viPending,
+    viDone,
+    upcoming,
+    stageDurations,
+    bottleneck,
+    staleApps,
+    actionQueue,
+  } = stats
 
   return (
     <div className="flex flex-col gap-5 overflow-y-auto h-full pb-6">
@@ -307,6 +422,68 @@ export default function PipelineView({ applications }) {
             {Math.round((rejected / total) * 100)}% of total
           </span>
           <span className="text-xs w-14 text-right" style={{ color: '#6b6b84' }}>—</span>
+        </div>
+      </div>
+
+      {/* Bottleneck + execution panel */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid #2a2a38' }}>
+          <div className="px-5 py-3 text-xs font-semibold uppercase tracking-wide"
+            style={{ background: '#1a1a24', color: '#6b6b84', borderBottom: '1px solid #2a2a38' }}>
+            Stage Velocity (avg days in stage)
+          </div>
+          <div className="p-4 flex flex-col gap-2.5" style={{ background: '#1e1e28' }}>
+            {stageDurations.map(d => (
+              <div key={d.stage} className="flex items-center gap-3">
+                <span className="text-xs w-36 truncate" style={{ color: '#9ca3af' }}>{d.stage}</span>
+                <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: '#2a2a38' }}>
+                  <div
+                    className="h-full rounded-full"
+                    style={{
+                      width: `${Math.min(100, Math.round((d.avgDays / Math.max(1, bottleneck?.avgDays || 1)) * 100))}%`,
+                      background: d.stage === bottleneck?.stage ? '#ef4444' : '#6c63ff',
+                    }}
+                  />
+                </div>
+                <span className="text-xs font-semibold w-16 text-right" style={{ color: d.stage === bottleneck?.stage ? '#f87171' : '#c4c4d4' }}>
+                  {d.avgDays ? `${Math.round(d.avgDays)}d` : '0d'}
+                </span>
+              </div>
+            ))}
+            {bottleneck?.avgDays > 0 && (
+              <p className="text-xs mt-1" style={{ color: '#f59e0b' }}>
+                Bottleneck: {bottleneck.stage} (~{Math.round(bottleneck.avgDays)} days avg)
+              </p>
+            )}
+            {staleApps.length > 0 && (
+              <p className="text-xs" style={{ color: '#ef4444' }}>
+                {staleApps.length} application{staleApps.length > 1 ? 's are' : ' is'} stale ({STALE_THRESHOLD_DAYS}+ days without movement)
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid #2a2a38' }}>
+          <div className="px-5 py-3 text-xs font-semibold uppercase tracking-wide"
+            style={{ background: '#1a1a24', color: '#6b6b84', borderBottom: '1px solid #2a2a38' }}>
+            Action Queue (what to do next)
+          </div>
+          <div className="p-4 flex flex-col gap-2.5" style={{ background: '#1e1e28' }}>
+            {actionQueue.length === 0 ? (
+              <p className="text-sm" style={{ color: '#6b6b84' }}>
+                No urgent actions right now. Keep applying and tracking updates.
+              </p>
+            ) : (
+              actionQueue.map(item => (
+                <ActionItem
+                  key={item.id}
+                  title={item.title}
+                  meta={item.meta}
+                  urgency={item.urgency}
+                />
+              ))
+            )}
+          </div>
         </div>
       </div>
 
