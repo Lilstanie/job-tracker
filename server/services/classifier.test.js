@@ -451,6 +451,32 @@ Due to application volumes, we are unable to provide individual feedback at this
     expect(results[0].summary).toBe('Application unsuccessful')
   })
 
+  it('classifies "unable to provide individual feedback" volume boilerplate as Rejected', async () => {
+    const variants = [
+      'Due to application volumes, we are unable to provide individual feedback at this stage.',
+      'Due to the volume of applications received, we are unfortunately unable to provide individual feedback at this time.',
+      'Due to the high volume of applications, we’re unable to provide individual feedback. We appreciate your understanding.',
+    ]
+    for (const [i, body] of variants.entries()) {
+      const { results } = await classifyEmails(
+        [
+          {
+            id: `vol-${i}`,
+            subject: 'Update on your application',
+            snippet: 'Thank you for applying.',
+            bodyText: `Hi Stan, Thank you for your application. ${body}`,
+            from: 'Careers <careers@example.com>',
+            date: '2026-05-06T00:00:00.000Z',
+          },
+        ],
+        [],
+        []
+      )
+      expect(results, `variant ${i}`).toHaveLength(1)
+      expect(results[0].detectedStage, `variant ${i}: ${body}`).toBe('Rejected')
+    }
+  })
+
   it('classifies Workday polite rejection as Rejected despite thank-you opener (ResMed)', async () => {
     const emails = [
       {

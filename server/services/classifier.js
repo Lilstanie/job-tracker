@@ -31,6 +31,10 @@ const STAGE_RULES = [
       /pursue other candidates/i,
       /decided to pursue other candidates/i,
       /other candidates who more closely match/i,
+      // High-volume "no individual feedback" boilerplate — almost exclusively rejection
+      /unable to (?:provide|offer|give)\s+(?:individual|personal|specific|detailed)\s+feedback/i,
+      /(?:high\s+)?volume\s+of\s+applications.{0,40}(?:unable|cannot|can(?:'|’)t)\s+(?:to\s+)?(?:provide|offer|give)/i,
+      /due to (?:the\s+)?(?:high\s+)?(?:volume|number)\s+of\s+applications/i,
     ],
   },
   {
@@ -102,6 +106,9 @@ function detectStage(subject, snippet) {
     /pursue other candidates/i,
     /decided to pursue other candidates/i,
     /other candidates who more closely match/i,
+    /unable to (?:provide|offer|give)\s+(?:individual|personal|specific|detailed)\s+feedback/i,
+    /(?:high\s+)?volume\s+of\s+applications.{0,40}(?:unable|cannot|can(?:'|’)t)\s+(?:to\s+)?(?:provide|offer|give)/i,
+    /due to (?:the\s+)?(?:high\s+)?(?:volume|number)\s+of\s+applications/i,
   ]
   if (politeRejectionPatterns.some(p => p.test(text))) {
     return { stage: 'Rejected', confidence: 'high' }
