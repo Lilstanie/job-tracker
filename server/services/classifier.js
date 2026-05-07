@@ -31,10 +31,13 @@ const STAGE_RULES = [
       /pursue other candidates/i,
       /decided to pursue other candidates/i,
       /other candidates who more closely match/i,
-      // High-volume "no individual feedback" boilerplate — almost exclusively rejection
+      // High-volume "no individual feedback" boilerplate — almost exclusively rejection.
+      // The combined pattern below requires the explicit "unable to provide" follow-up
+      // because the standalone "due to high volume of applications" phrase also appears
+      // in legitimate Applied confirmations (e.g. Mastercard: "due to the high volume of
+      // applications we receive, we may not reach out — check Workday for status").
       /unable to (?:provide|offer|give)\s+(?:individual|personal|specific|detailed)\s+feedback/i,
       /(?:high\s+)?volume\s+of\s+applications.{0,40}(?:unable|cannot|can(?:'|’)t)\s+(?:to\s+)?(?:provide|offer|give)/i,
-      /due to (?:the\s+)?(?:high\s+)?(?:volume|number)\s+of\s+applications/i,
     ],
   },
   {
@@ -108,7 +111,6 @@ function detectStage(subject, snippet) {
     /other candidates who more closely match/i,
     /unable to (?:provide|offer|give)\s+(?:individual|personal|specific|detailed)\s+feedback/i,
     /(?:high\s+)?volume\s+of\s+applications.{0,40}(?:unable|cannot|can(?:'|’)t)\s+(?:to\s+)?(?:provide|offer|give)/i,
-    /due to (?:the\s+)?(?:high\s+)?(?:volume|number)\s+of\s+applications/i,
   ]
   if (politeRejectionPatterns.some(p => p.test(text))) {
     return { stage: 'Rejected', confidence: 'high' }
@@ -373,6 +375,78 @@ export function extractDueDate(subject, snippet, emailDate = null, userTimeZone 
   return parseRelativeDeadline(text, emailDate)
 }
 
+// ── Job-alert / aggregator filter ────────────────────────────────────────────
+
+// Domains that exclusively send broadcast "applications open / closing soon /
+// apply now" reminders rather than per-applicant status updates. Any email
+// from these senders is treated as marketing noise and dropped before
+// classification runs — it must not pollute timelines, hijack due-date
+// extraction, or attach itself to an existing application.
+const JOB_ALERT_DOMAINS = new Set([
+  'gradconnection.com', 'gradconnection.com.au',
+  'prosple.com',
+  'gradaustralia.com', 'gradaustralia.com.au',
+  'seekgrad.com.au',
+  'studentedge.org',
+  'mygradcareer.com',
+])
+
+// Specific from-addresses on otherwise-mixed domains (LinkedIn, Indeed,
+// Glassdoor send both real notifications and job alerts — the local-part is
+// the discriminator). These are the alert/digest aliases — a real LinkedIn
+// Easy-Apply confirmation from a company would not use these addresses.
+const JOB_ALERT_FROM_PATTERNS = [
+  // LinkedIn job-alert / digest aliases
+  /^jobs?-listings@linkedin\.com$/i,
+  /^jobalerts-noreply@linkedin\.com$/i,
+  /^jobs-noreply@linkedin\.com$/i,
+  /^job-alerts@linkedin\.com$/i,
+  /^linkedinjobs@linkedin\.com$/i,
+  /^recruiternotifications@linkedin\.com$/i,
+  // Indeed job alerts
+  /^alert@indeed\.com$/i,
+  /^jobalerts@indeed\.com$/i,
+  /^noreply@indeed\.com$/i,
+  /^donotreply@my\.indeed\.com$/i,
+  // Glassdoor job alerts
+  /^jobalerts@glassdoor\.com$/i,
+  /^noreply@glassdoor\.com$/i,
+]
+
+// Subject phrases that mark an email as recruitment-marketing about an open
+// round rather than a per-applicant status update. Conservative on purpose:
+// must occur at the very start of the subject so legitimate "Reminder: …" or
+// "Last chance to complete your interview" subjects are not swept up.
+const JOB_ALERT_SUBJECT_RE = /^\s*(?:closing soon|applications? clos[ei]|apply now|last chance to apply|don['']?t miss out|now hiring|we['']re hiring|join (?:us|our team))\b[\s:!]/i
+
+function getEmailAddress(from) {
+  if (!from) return null
+  const angle = String(from).match(/<([^>]+)>/)
+  const addr = angle ? angle[1] : String(from).match(/([^\s<>]+@[^\s<>]+)/)?.[1]
+  return addr ? addr.toLowerCase() : null
+}
+
+function getEmailDomain(from) {
+  const addr = getEmailAddress(from)
+  if (!addr) return null
+  const at = addr.indexOf('@')
+  if (at < 0) return null
+  return addr.slice(at + 1)
+}
+
+function isJobAlertEmail(email) {
+  const addr = getEmailAddress(email?.from)
+  if (addr && JOB_ALERT_FROM_PATTERNS.some((re) => re.test(addr))) return true
+  const domain = getEmailDomain(email?.from)
+  if (domain) {
+    if (JOB_ALERT_DOMAINS.has(domain)) return true
+    for (const d of JOB_ALERT_DOMAINS) {
+      if (domain.endsWith('.' + d)) return true
+    }
+  }
+  return JOB_ALERT_SUBJECT_RE.test(String(email?.subject ?? ''))
+}
+
 // ── Company extraction ───────────────────────────────────────────────────────
 
 // Domain parts that belong to ATS/assessment platforms — never the actual employer
@@ -542,6 +616,16 @@ const COMPANY_INDICATOR_WORDS = new Set([
   'automotive', 'aerospace', 'defence', 'defense', 'retail', 'education',
   'university', 'institute', 'foundation', 'commonwealth', 'mutual',
   'radar', 'finance', 'mining', 'resources', 'materials',
+  // Geographies often baked into corporate names — "Airservices Australia",
+  // "ANZ New Zealand", "BMW USA", "Toyota Japan". A two-word display name with
+  // a country/region word is a brand, not a person.
+  'australia', 'australian', 'usa', 'us', 'america', 'american',
+  'uk', 'britain', 'british', 'england', 'european',
+  'canada', 'canadian', 'nz', 'zealand',
+  'asia', 'pacific', 'apac', 'emea', 'anz',
+  'singapore', 'india', 'indian', 'china', 'chinese',
+  'japan', 'japanese', 'korea', 'korean',
+  'germany', 'german', 'france', 'french', 'spain', 'spanish', 'italy', 'italian',
 ])
 
 function looksLikePersonName(name) {
@@ -815,9 +899,228 @@ function significantTokens(s) {
     .filter(t => !['group', 'team', 'program', 'programme', 'role', 'intern', 'internship', 'graduate'].includes(t))
 }
 
+// ── Role taxonomy (role bank) ────────────────────────────────────────────────
+// Canonical role categories with aliases. Used to decide whether two roles at
+// the same company describe the same position (merge) or different positions
+// (keep separate, e.g. Citadel "Software Engineering" vs "FPGA Engineering").
+//
+// Add to this list when a new alias appears in the wild — it's intentionally
+// data-driven so we don't have to touch the matching code for new variants.
+const ROLE_CATEGORIES = [
+  {
+    canonical: 'Software Engineer',
+    aliases: [
+      'software engineer', 'software engineering', 'swe', 'sde',
+      'software developer', 'software development engineer', 'sw engineer',
+      'application engineer', 'application developer',
+      'backend engineer', 'back-end engineer', 'back end engineer',
+      'frontend engineer', 'front-end engineer', 'front end engineer',
+      'full stack engineer', 'full-stack engineer', 'fullstack engineer',
+      'mobile engineer', 'ios engineer', 'android engineer',
+      'systems engineer', 'systems software',
+    ],
+  },
+  {
+    canonical: 'FPGA / Hardware Engineer',
+    aliases: [
+      'fpga engineer', 'fpga engineering', 'fpga developer', 'fpga design',
+      'firmware engineer', 'embedded engineer', 'embedded software',
+      'hardware engineer', 'hardware design', 'asic engineer', 'rtl engineer',
+      'chip design', 'silicon engineer',
+    ],
+  },
+  {
+    canonical: 'Data Scientist / ML Engineer',
+    aliases: [
+      'data scientist', 'data science',
+      'machine learning engineer', 'ml engineer', 'ml researcher',
+      'ai engineer', 'ai/ml engineer', 'ai researcher',
+      'applied scientist', 'research scientist',
+    ],
+  },
+  {
+    canonical: 'Data Analyst',
+    aliases: [
+      'data analyst', 'data analytics',
+      'analytics analyst', 'reporting analyst',
+    ],
+  },
+  {
+    canonical: 'Business Analyst',
+    aliases: [
+      'business analyst', 'business intelligence', 'bi analyst',
+      'business systems analyst', 'process analyst',
+    ],
+  },
+  {
+    canonical: 'Data Engineer',
+    aliases: [
+      'data engineer', 'data engineering', 'analytics engineer',
+      'etl engineer', 'pipeline engineer',
+    ],
+  },
+  {
+    canonical: 'Test Analyst',
+    aliases: [
+      // Manual / process-focused QA — usually distinct from automation-heavy
+      // SDET / QA Engineer roles in AU/NZ recruiting.
+      'test analyst', 'qa analyst',
+    ],
+  },
+  {
+    canonical: 'QA / Test Engineer',
+    aliases: [
+      'qa engineer', 'quality assurance engineer', 'qa automation',
+      'test engineer', 'software test engineer',
+      'sdet', 'software development engineer in test',
+      'automation tester', 'automation engineer in test',
+    ],
+  },
+  {
+    canonical: 'DevOps / SRE',
+    aliases: [
+      'devops', 'devops engineer', 'site reliability', 'site reliability engineer',
+      'sre', 'platform engineer', 'platform engineering',
+      'infrastructure engineer', 'cloud engineer',
+    ],
+  },
+  {
+    canonical: 'Security Engineer',
+    aliases: [
+      'security engineer', 'cyber security', 'cybersecurity',
+      'cyber engineer', 'cyber analyst', 'infosec', 'application security',
+      'soc analyst', 'penetration tester', 'pen tester',
+    ],
+  },
+  {
+    canonical: 'Quantitative Researcher',
+    aliases: [
+      'quantitative researcher', 'quant researcher',
+      'quantitative research', 'quant research',
+      'quantitative analyst', 'quant analyst',
+      'quantitative trader', 'quant trader',
+      'quantitative developer', 'quant developer', 'quant dev',
+    ],
+  },
+  {
+    canonical: 'Trader',
+    aliases: [
+      'trader', 'trading analyst', 'execution trader',
+      'sales and trading', 'sales & trading',
+    ],
+  },
+  {
+    canonical: 'Investment Banking',
+    aliases: [
+      'investment banking', 'investment banker', 'ib analyst',
+      'corporate finance', 'm&a', 'mergers and acquisitions',
+      'leveraged finance', 'capital markets',
+    ],
+  },
+  {
+    canonical: 'Consultant',
+    aliases: [
+      'consultant', 'consulting', 'management consultant',
+      'strategy consultant', 'business consultant', 'technology consultant',
+    ],
+  },
+  {
+    canonical: 'Audit',
+    aliases: [
+      'audit', 'auditor', 'external audit', 'internal audit',
+      'risk assurance', 'assurance services',
+    ],
+  },
+  {
+    canonical: 'Tax',
+    aliases: ['tax', 'tax associate', 'tax consultant', 'tax accountant'],
+  },
+  {
+    canonical: 'Risk',
+    aliases: ['risk analyst', 'risk management', 'credit risk', 'market risk', 'operational risk'],
+  },
+  {
+    canonical: 'Forensic',
+    aliases: ['forensic', 'forensic technology', 'forensic tech', 'forensic services', 'forensic accounting'],
+  },
+  {
+    canonical: 'Actuarial',
+    aliases: ['actuarial', 'actuary', 'actuarial analyst', 'actuarial consultant'],
+  },
+  {
+    canonical: 'Product Manager',
+    aliases: [
+      'product manager', 'product management', 'product owner',
+      'associate product manager', 'apm', 'technical product manager', 'tpm',
+    ],
+  },
+  {
+    canonical: 'Designer',
+    aliases: [
+      'ux designer', 'ui designer', 'ux/ui designer', 'product designer',
+      'visual designer', 'interaction designer', 'graphic designer',
+    ],
+  },
+  {
+    canonical: 'Tutor',
+    aliases: ['tutor', 'teaching assistant', 'instructor', 'educator'],
+  },
+  {
+    canonical: 'Marketing',
+    aliases: ['marketing analyst', 'marketing associate', 'digital marketing', 'brand manager'],
+  },
+  {
+    canonical: 'Sales',
+    aliases: ['sales associate', 'account executive', 'business development', 'bdr', 'sdr'],
+  },
+  {
+    canonical: 'Operations',
+    aliases: ['operations analyst', 'operations associate', 'operations manager', 'supply chain'],
+  },
+  {
+    canonical: 'Mechanical Engineer',
+    aliases: ['mechanical engineer', 'mechanical engineering', 'mechatronics engineer'],
+  },
+  {
+    canonical: 'Electrical Engineer',
+    aliases: ['electrical engineer', 'electrical engineering', 'power engineer'],
+  },
+  {
+    canonical: 'Civil Engineer',
+    aliases: ['civil engineer', 'civil engineering', 'structural engineer'],
+  },
+  {
+    canonical: 'Chemical Engineer',
+    aliases: ['chemical engineer', 'chemical engineering', 'process engineer'],
+  },
+]
+
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Pre-compile alias matchers once. Each alias becomes a word-boundary regex so
+// "swe" doesn't match "answer" and "ai" doesn't match "trainee".
+const COMPILED_ROLE_CATEGORIES = ROLE_CATEGORIES.map((cat) => ({
+  canonical: cat.canonical,
+  matchers: cat.aliases.map((alias) => new RegExp(`(?:^|[^a-z0-9])${escapeRegex(alias)}(?=$|[^a-z0-9])`, 'i')),
+}))
+
+// Map a free-text role label to its canonical category, or null if unknown.
+function categorizeRole(role) {
+  if (!role) return null
+  const text = String(role).toLowerCase().replace(/\s{2,}/g, ' ').trim()
+  if (!text) return null
+  for (const { canonical, matchers } of COMPILED_ROLE_CATEGORIES) {
+    if (matchers.some((re) => re.test(text))) return canonical
+  }
+  return null
+}
+
 // Strong differentiator tokens — when one role has one of these and the other
 // has a *different* one (e.g. FPGA vs Software), they describe different jobs
-// at the same company and should NOT be merged.
+// at the same company and should NOT be merged. Used as a fallback when at
+// least one side does not map to a canonical role category.
 const ROLE_DIFFERENTIATORS = new Set([
   'software', 'hardware', 'fpga', 'firmware', 'embedded',
   'frontend', 'backend', 'fullstack', 'mobile', 'ios', 'android', 'web',
@@ -834,16 +1137,25 @@ const ROLE_DIFFERENTIATORS = new Set([
 function hasConcreteRoleSignal(role = '') {
   const r = String(role || '').toLowerCase()
   if (!r || isNoisyRole(r)) return false
+  if (categorizeRole(r)) return true
   for (const tok of significantTokens(r)) {
     if (ROLE_DIFFERENTIATORS.has(tok)) return true
   }
   return false
 }
 
-// True when both roles look concrete AND each has at least one differentiator
-// the other lacks (e.g. {fpga,engineering} vs {software,engineering,campus}
-// → fpga vs software → clearly different).
+// True when the two roles describe meaningfully different positions and
+// should not be merged into one timeline.
+//
+// Decision order:
+//   1. If both map to a known role category, compare the categories directly.
+//   2. Otherwise, fall back to "do both sides contain a different concrete
+//      differentiator token?" — same logic as before.
 function rolesClearlyDiffer(roleA, roleB) {
+  const catA = categorizeRole(roleA)
+  const catB = categorizeRole(roleB)
+  if (catA && catB) return catA !== catB
+
   if (!hasConcreteRoleSignal(roleA) || !hasConcreteRoleSignal(roleB)) return false
   const a = new Set(significantTokens(roleA))
   const b = new Set(significantTokens(roleB))
@@ -945,6 +1257,11 @@ function sameRoleFamily(a, b) {
   if (isNoisyRole(aRole) && isNoisyRole(bRole)) return true
   // Exact role match (after cleanup).
   if (normaliseStr(cleanRoleText(aRole)) === normaliseStr(cleanRoleText(bRole))) return true
+  // Role bank: both map to the same canonical category (e.g. "Software
+  // Developer" ≡ "Software Engineer" ≡ "SWE").
+  const catA = categorizeRole(aRole)
+  const catB = categorizeRole(bRole)
+  if (catA && catB && catA === catB) return true
   // One side is umbrella / noisy → absorbs concrete sibling unless they
   // contain different concrete role differentiators (e.g. FPGA vs Software).
   const aSoft = isUmbrellaRole(aRole) || isNoisyRole(aRole)
@@ -1059,8 +1376,14 @@ export async function classifyEmails(emails, applications, knownIds = [], userTi
     console.log(`[classifier] Found ${skippedKnown} already-synced emails (used for context only)`)
 
   const groups = new Map()
+  let skippedAlerts = 0
 
   for (const email of emails) {
+    if (isJobAlertEmail(email)) {
+      skippedAlerts++
+      console.log(`[classifier] SKIP job-alert/marketing: "${email.subject}" from ${email.from}`)
+      continue
+    }
     const isKnown = knownSet.has(email.id)
     const bodyOrSnippet = email.bodyText ?? email.snippet
     const { stage, confidence } = detectStage(email.subject, bodyOrSnippet)
@@ -1108,6 +1431,9 @@ export async function classifyEmails(emails, applications, knownIds = [], userTi
   const results = consolidateGroups(Array.from(groups.values()))
     .filter(r => r.hasFresh)
     .map(({ hasFresh, __drop, ...rest }) => rest)
+
+  if (skippedAlerts > 0)
+    console.log(`[classifier] Filtered ${skippedAlerts} job-alert/marketing email(s)`)
 
   return { results, skippedKnown }
 }

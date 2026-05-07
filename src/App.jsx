@@ -72,15 +72,19 @@ export default function App() {
   const handleEditSave = (data) => { updateApplication(editApp.id, data); setEditApp(null) }
 
   const buildHistoryFromSources = (sources = [], fallbackStage = 'Applied') => {
+    // Per-email stage inference. Mirrors a subset of the server classifier so
+    // unrelated emails (e.g. "Closing soon" reminders) don't get tarred with the
+    // thread's terminal stage. Defaults to 'Applied' when nothing is recognised.
     const stageFromText = (subject = '', snippet = '') => {
       const text = `${subject} ${snippet}`.toLowerCase()
-      if (/regret to inform|unsuccessful|deemed unsuccessful|not been selected|not moving forward/.test(text)) return 'Rejected'
+      if (/regret to inform|unsuccessful|deemed unsuccessful|not been selected|not moving forward|will not be moving forward|not to progress your application|decided to pursue other candidates|other candidates who more closely match|unable to (?:provide|offer|give)\s+(?:individual|personal|specific|detailed)\s+feedback/.test(text)) return 'Rejected'
       if (/offer of employment|pleased to offer|delighted to offer|verbal offer/.test(text)) return 'Offer'
       if (/assessment cent(re|er)|assessment day|ac day/.test(text)) return 'Assessment Centre'
-      if (/video interview|phone interview|telephone interview|interview invitation|invited to interview/.test(text)) return 'Video Interview'
-      if (/online assessment|hackerrank|codility|hirevue|pymetrics|assessment/.test(text)) return 'Online Assessment'
-      if (/application|thank you for applying|application acknowledgement|application acknowledgment/.test(text)) return 'Applied'
-      return fallbackStage
+      if (/video interview|phone interview|telephone interview|interview invitation|invited to interview|invited to a video/.test(text)) return 'Video Interview'
+      if (/online assessment|hackerrank|codility|hirevue|pymetrics/.test(text)) return 'Online Assessment'
+      // Default to Applied for anything we can't confidently classify (reminders,
+      // "closing soon", "thank you for applying", acknowledgements, etc.).
+      return 'Applied'
     }
 
     const sorted = [...sources]
@@ -94,7 +98,9 @@ export default function App() {
       const stage = stageFromText(s.subject, s.snippet)
       const timestamp = new Date(s.date).toISOString()
       const last = history[history.length - 1]
-      if (last && last.stage === stage) continue
+      // Drop only literal duplicates (same email pushed twice) — keep distinct
+      // emails even when they share a stage so each gets its own timeline row.
+      if (last && last.emailSubject === s.subject && last.timestamp === timestamp) continue
       history.push({
         stage,
         timestamp,
@@ -105,17 +111,26 @@ export default function App() {
     }
     if (!history.length) return null
 
-    // Guarantee timeline final stage aligns with classifier output.
+    // Guarantee timeline final stage aligns with classifier output. If the most
+    // recent timeline entry is the SAME email the classifier ruled on, upgrade
+    // its stage in place instead of appending a duplicate row (this was the
+    // "Application Outcome appears as both Applied and Rejected" bug).
     const last = history[history.length - 1]
     if (fallbackStage && last?.stage !== fallbackStage) {
       const latestSource = sorted[sorted.length - 1]
-      history.push({
-        stage: fallbackStage,
-        timestamp: latestSource?.date ? new Date(latestSource.date).toISOString() : new Date().toISOString(),
-        note: 'Stage inferred from Gmail sync',
-        emailSubject: latestSource?.subject ?? '',
-        emailFrom: latestSource?.from ?? '',
-      })
+      const latestTs = latestSource?.date ? new Date(latestSource.date).toISOString() : new Date().toISOString()
+      const latestSubject = latestSource?.subject ?? ''
+      if (last && last.emailSubject === latestSubject && last.timestamp === latestTs) {
+        last.stage = fallbackStage
+      } else {
+        history.push({
+          stage: fallbackStage,
+          timestamp: latestTs,
+          note: 'Stage inferred from Gmail sync',
+          emailSubject: latestSubject,
+          emailFrom: latestSource?.from ?? '',
+        })
+      }
     }
 
     return history

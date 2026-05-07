@@ -427,6 +427,72 @@ describe('classifyEmails', () => {
     expect(results[0].detectedStage).toBe('Rejected')
   })
 
+  it('keeps two same-company roles separate when role bank says different categories (SWE vs FPGA, Data Analyst vs SDET)', async () => {
+    const emails = [
+      {
+        id: 'cit-swe',
+        subject: 'Citadel Software Engineering Application',
+        snippet: 'unfortunately not progressing',
+        bodyText: 'Thank you for your interest in Software Engineering at Citadel. We will not be moving forward with your application for Software Engineering at this time.',
+        from: 'Recruiter A <a@citadel.com>',
+        date: '2026-04-01T00:00:00.000Z',
+      },
+      {
+        id: 'cit-fpga',
+        subject: 'Citadel FPGA Application',
+        snippet: 'unfortunately',
+        bodyText: 'Thank you for your interest in FPGA Engineering at Citadel. We will not be moving forward with your candidacy for FPGA Engineering at this time.',
+        from: 'Recruiter B <b@citadel.com>',
+        date: '2026-04-02T00:00:00.000Z',
+      },
+      {
+        id: 'cit-da',
+        subject: 'Outcome of your application for the Data Analyst role at Citadel',
+        snippet: 'we regret to inform',
+        bodyText: 'We regret to inform you that we will not be progressing your application for the Data Analyst role at Citadel.',
+        from: 'Recruiter C <c@citadel.com>',
+        date: '2026-04-03T00:00:00.000Z',
+      },
+      {
+        id: 'cit-sdet',
+        subject: 'Outcome of your application for the SDET role at Citadel',
+        snippet: 'we regret to inform',
+        bodyText: 'We regret to inform you that we will not be progressing your application for the SDET role at Citadel.',
+        from: 'Recruiter D <d@citadel.com>',
+        date: '2026-04-04T00:00:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(4)
+    expect(new Set(results.map(r => r.company)).size).toBe(1)
+    expect(results.every(r => r.detectedStage === 'Rejected')).toBe(true)
+  })
+
+  it('treats role aliases as the same canonical category (Software Developer ≡ Software Engineer)', async () => {
+    const emails = [
+      {
+        id: 'sd-app',
+        subject: 'Acme Software Developer Application',
+        snippet: 'thanks for applying',
+        bodyText: 'Thank you for applying to the Software Developer position at Acme.',
+        from: 'Acme Talent <talent@acme.example>',
+        date: '2026-04-01T00:00:00.000Z',
+      },
+      {
+        id: 'sd-rej',
+        subject: 'Acme Software Engineer outcome',
+        snippet: 'we regret',
+        bodyText: 'Thank you for your interest in the Software Engineer position at Acme. We regret to inform you that your application has been unsuccessful.',
+        from: 'Acme Talent <talent@acme.example>',
+        date: '2026-04-10T00:00:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].detectedStage).toBe('Rejected')
+    expect(results[0].sourceEmails).toHaveLength(2)
+  })
+
   it('extracts company from HireVue display name and never returns "hirevue-app" as company', async () => {
     const emails = [
       {
@@ -646,5 +712,212 @@ At this time, we've decided to pursue other candidates who more closely match th
     expect(results[0].company).toBe('Capgemini')
     expect(results[0].role).toContain('Capgemini AUNZ Graduate Program 2026')
     expect(results[0].role).not.toMatch(/new job application received/i)
+  })
+
+  it('extracts "Airservices Australia" as company (geographic suffix is not a person name)', async () => {
+    const emails = [
+      {
+        id: 'airservices-1',
+        subject: 'Application Outcome - Air Traffic Control Trainee',
+        snippet: 'Thank you for the time and commitment to your application.',
+        bodyText: 'Dear Ziqi, Thank you for the time and commitment to your application for the position of Air Traffic Control Trainee with Airservices Australia. Your online testing results have been reviewed and assessed and unfortunately your application has been deemed unsuccessful. Due to the large volume of applications, we receive, we are unable to provide individual feedback.',
+        from: 'Airservices Australia <avrecruit-504@mail.pageuppeople.com>',
+        date: '2026-04-29T00:06:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Airservices Australia')
+    expect(results[0].role).toBe('Air Traffic Control Trainee')
+    expect(results[0].detectedStage).toBe('Rejected')
+  })
+
+  it('skips GradConnection-style aggregator senders entirely (broadcast marketing, not real applications)', async () => {
+    const applications = [
+      { id: 'app-cba', company: 'CommBank', role: 'Graduate' },
+    ]
+    const emails = [
+      {
+        id: 'gradconnection-1',
+        subject: 'Closing soon: CommBank 2027 Graduate Program',
+        snippet: "If you're planning to apply for the 2027 CommBank Graduate Program, now's the time! Applications close soon on 21 April 2026.",
+        bodyText: "Hi there, Applications close soon on 21 April 2026. Apply now.",
+        from: 'SEEK Grad <mail@gradconnection.com>',
+        date: '2026-04-16T01:31:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, applications, [])
+    expect(results).toHaveLength(0)
+  })
+
+  it('skips "Closing soon: …" / "Apply now" subjects even when sender is a real company domain', async () => {
+    const emails = [
+      {
+        id: 'cba-marketing',
+        subject: 'Apply now: CommBank 2027 Graduate Program',
+        snippet: "Don't miss your chance — applications are still open.",
+        bodyText: 'Apply now to start your career with us.',
+        from: 'CommBank Careers <careers@cba.com.au>',
+        date: '2026-04-16T01:31:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(0)
+  })
+
+  it('does NOT skip legitimate "Reminder" / "Last chance" interview emails (the aggregator filter must be conservative)', async () => {
+    const emails = [
+      {
+        id: 'real-interview-reminder',
+        subject: 'Reminder: complete your video interview by 21 April 2026',
+        snippet: 'You have 24 hours left to submit your Video Interview with Quantium.',
+        bodyText: 'You have 24 hours left to submit your Video Interview with Quantium. Please complete it as soon as possible.',
+        from: 'Quantium Graduate Recruitment <noreply@mail.hirevue-app.com.au>',
+        date: '2026-04-20T10:00:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].detectedStage).toBe('Video Interview')
+  })
+
+  it('keeps Data Analyst and Business Analyst as separate canonical roles (no auto-merge)', async () => {
+    const emails = [
+      {
+        id: 'da-1',
+        subject: 'Application received - Data Analyst',
+        snippet: 'Thank you for applying to our Data Analyst role.',
+        bodyText: 'Thank you for applying for the Data Analyst position at MegaCorp.',
+        from: 'MegaCorp Careers <careers@megacorp.example>',
+        date: '2026-05-01T00:00:00.000Z',
+      },
+      {
+        id: 'ba-1',
+        subject: 'Application received - Business Analyst',
+        snippet: 'Thank you for applying to our Business Analyst role.',
+        bodyText: 'Thank you for applying for the Business Analyst position at MegaCorp.',
+        from: 'MegaCorp Careers <careers@megacorp.example>',
+        date: '2026-05-02T00:00:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(2)
+    const roles = results.map((r) => r.role).sort()
+    expect(roles).toEqual(['Business Analyst', 'Data Analyst'])
+  })
+
+  it('skips LinkedIn job-alert digests but keeps real per-applicant company notifications', async () => {
+    const emails = [
+      {
+        id: 'linkedin-alert-1',
+        subject: '5 new jobs in Sydney for Software Engineer',
+        snippet: 'Your daily digest of recommended jobs.',
+        from: 'LinkedIn <jobalerts-noreply@linkedin.com>',
+        date: '2026-05-01T09:00:00.000Z',
+      },
+      {
+        id: 'linkedin-alert-2',
+        subject: 'New jobs at Atlassian',
+        snippet: 'Recommended for you',
+        from: 'LinkedIn Jobs <jobs-listings@linkedin.com>',
+        date: '2026-05-01T10:00:00.000Z',
+      },
+      {
+        id: 'real-application',
+        subject: 'Application sent to Atlassian',
+        snippet: 'Your application for Software Engineer at Atlassian was successfully submitted.',
+        bodyText: 'Your application for Software Engineer at Atlassian was successfully submitted.',
+        from: 'Atlassian Careers <careers@atlassian.com>',
+        date: '2026-05-01T11:00:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Atlassian')
+  })
+
+  it('regression: real-world emails containing "due to high volume of applications" classify correctly', async () => {
+    // Each of these emails contains the phrase "due to (high) volume of applications"
+    // but only some are rejections. The classifier must rely on the surrounding
+    // context (decision verbs + "unable to provide feedback") rather than the
+    // standalone phrase, otherwise legitimate Applied confirmations are mis-judged.
+    const cases = [
+      {
+        // Mastercard Workday: Applied confirmation — has "due to high volume" but
+        // it's about response times ("we may not reach out — check Workday"),
+        // not a rejection decision.
+        id: 'mastercard',
+        expected: 'Applied',
+        subject: 'Thank you for applying!',
+        from: 'Mastercard <noreply@workday.com>',
+        bodyText: 'Dear Ziqi, Thank you for your interest in joining Mastercard! We have received your application for the role: Software Engineer I, 2027 Mastercard Launch Graduate Program - Sydney, Australia. Whats next? Our team is carefully reviewing your application. Note: due to the high volume of applications we receive, we may not be able to reach out to each candidate directly, however you can check the status of your application at any time by logging into your Workday profile.',
+      },
+      {
+        // Optiver: real rejection — "regret to inform" + "decided not to proceed"
+        // + "unable to provide individual feedback" all present.
+        id: 'optiver',
+        expected: 'Rejected',
+        subject: 'Application Update - Software Developer Internship - 2026-27',
+        from: 'careers@optiver.com.au',
+        bodyText: 'Hi Ziqi, Thank you for taking the time to apply to the role of Software Developer Internship - 2026-27 at Optiver. However, after careful consideration, we regret to inform you that we have decided not to proceed with your application at this time. Due to the high volume of candidates, unfortunately we are unable to provide individual feedback.',
+      },
+      {
+        // Citadel APAC Terminal: per user, this is an EVENT decline, not a job
+        // rejection — application stays open for other roles. We should not flag
+        // it as Rejected just because it has "due to volume of applications".
+        id: 'citadel-event',
+        expected: 'Applied',
+        subject: 'Thank you for applying to the Citadel APAC Terminal',
+        from: 'No-Reply <no-reply@citadel.com>',
+        bodyText: 'Hello Ziqi, On behalf of Citadel and Citadel Securities, thank you for applying to the APAC Terminal 2026! Please know your credentials are impressive, however due to the volume of applications received we were only able to invite a select number of individuals to the event. We are always interested in knowing talented individuals such as yourself and will be in touch if any appropriate roles become available.',
+      },
+      {
+        // APSC AGGP: real rejection — "not been successful in progressing" + "unable
+        // to provide individual feedback" both present.
+        id: 'apsc',
+        expected: 'Rejected',
+        subject: '2027 Australian Government Graduate Program - Generalist Stream - Outcome',
+        from: 'apsc@nga.net.au',
+        bodyText: 'Hi Ziqi, Thank you for your continued interest in the Australian Government Graduate Program. We received over 3,700 applications this year, and due to the highly competitive nature of the process, unfortunately on this occasion, you have not been successful in progressing to the next stage of the recruitment process. Due to the high volume of applications received, we are unable to provide individual feedback at this stage.',
+      },
+    ]
+    for (const c of cases) {
+      const { results } = await classifyEmails([{
+        id: c.id,
+        subject: c.subject,
+        from: c.from,
+        bodyText: c.bodyText,
+        snippet: c.bodyText.slice(0, 200),
+        date: '2026-05-01T00:00:00.000Z',
+      }], [], [])
+      expect(results, `${c.id} should not be filtered as a job alert`).toHaveLength(1)
+      expect(results[0].detectedStage, `${c.id} expected ${c.expected}`).toBe(c.expected)
+    }
+  })
+
+  it('keeps Test Analyst and QA / Test Engineer (SDET) as separate canonical roles', async () => {
+    const emails = [
+      {
+        id: 'ta-1',
+        subject: 'Application received - Test Analyst',
+        snippet: 'Thank you for applying.',
+        bodyText: 'Thank you for applying for the Test Analyst position at MegaCorp.',
+        from: 'MegaCorp Careers <careers@megacorp.example>',
+        date: '2026-05-01T00:00:00.000Z',
+      },
+      {
+        id: 'sdet-1',
+        subject: 'Application received - SDET',
+        snippet: 'Thank you for applying.',
+        bodyText: 'Thank you for applying for the SDET position at MegaCorp.',
+        from: 'MegaCorp Careers <careers@megacorp.example>',
+        date: '2026-05-02T00:00:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(2)
+    const roles = results.map((r) => r.role.toLowerCase()).sort()
+    expect(roles[0]).toMatch(/sdet/)
+    expect(roles[1]).toMatch(/test analyst/)
   })
 })
