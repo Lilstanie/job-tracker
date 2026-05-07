@@ -23,6 +23,7 @@ const STAGE_RULES = [
       /not.*proceed/i, /decided not to/i, /no longer.*consider/i,
       /not a match for what we(?:'|’)re looking for/i,
       /not a match for what we are looking for/i,
+      /won(?:'|’)t be progressing your application/i,
     ],
   },
   {
@@ -135,6 +136,13 @@ function isNoisyRole(role = '') {
   if (!r) return true
   if (r.length < 6) return true
   return /^(application|application outcome|application update|thank you|thanks|job|email|mail|reminder)$/i.test(r)
+}
+
+function isNoisyCompanyLabel(name = '') {
+  const n = String(name || '').toLowerCase()
+  if (!n) return true
+  if (GENERIC_COMPANY_NAMES.has(n)) return true
+  return /(outcome of your application|your application for|application outcome|application received|thank you for your application)/i.test(n)
 }
 
 // ── Due date extraction ──────────────────────────────────────────────────────
@@ -335,13 +343,18 @@ const ATS_DOMAIN_PARTS = new Set([
 const GENERIC_COMPANY_NAMES = new Set([
   'your', 'you', 'team', 'talent team', 'hiring team', 'recruitment team',
   'careers', 'notifications', 'no-reply', 'noreply', 'info', 'online', 'reminder',
-  'mail', 'email', 'job', 'application', 'application outcome', 'workday',
+  'mail', 'email', 'job', 'application', 'application outcome', 'workday', 'name', 'graduate', 'system',
+  // Generic role-modifier words that should never be returned as company names
+  'student', 'students', 'senior', 'junior', 'associate', 'principal', 'lead',
+  'intern', 'interns', 'internship', 'engineer', 'analyst', 'developer',
+  'hire', 'hired', 'apply', 'recruit', 'recruiter', 'recruiting',
 ])
 
 const COMPANY_ALIAS_RULES = [
   { pattern: /\b(cba|commbank|commonwealth\s*bank(?:\s*group)?)\b/i, canonical: 'Commonwealth Bank' },
   { pattern: /\bexamplebanka\b|example bank a/i, canonical: 'Example Bank A' },
   { pattern: /\bexamplebankb\b|example bank b/i, canonical: 'Example Bank B' },
+  { pattern: /\bconsultingfirm\b/i, canonical: 'Consulting Firm' },
   { pattern: /\bseek\b/i, canonical: 'SEEK' },
 ]
 
@@ -361,12 +374,16 @@ function sanitiseCompanyName(raw) {
     .replace(/\b(no[\s.-]?reply|noreply|notifications?)\b/gi, '')
     .replace(/\s+@\s*(?:icims|workday|greenhouse|lever|smartrecruiters)\b.*$/i, '')
     .replace(/\s*\([^)]*\)\s*$/g, '')
+    // Strip trailing program/program-stage suffixes that get baked into ATS
+    // display names. e.g. "Quantium Graduate Academy" → "Quantium".
+    .replace(/\s+(?:graduate|early\s+career|internship|cadetship|talent|recruitment|recruiting)\s+(?:program|programme|scheme|academy|pathway|pool|pipeline)\s*$/i, '')
+    .replace(/\s+(?:recruitment|recruiting|hiring|talent|careers?)\s+team\s*$/i, '')
     .replace(/\s{2,}/g, ' ')
     .trim()
 
   if (!name) return null
   const low = name.toLowerCase()
-  if (GENERIC_COMPANY_NAMES.has(low)) return null
+  if (isNoisyCompanyLabel(low)) return null
   if (/^[^@\s]+@[^@\s]+$/.test(name)) return null
   if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(name)) return null // raw domain-like label
   if (name.length < 2) return null
@@ -385,6 +402,7 @@ function inferCompanyFromSubject(subject = '') {
 function extractSubjectCompany(subject) {
   if (!subject) return null
   const s = subject.replace(/^\d{4}\s+/, '') // strip leading year
+  if (/^outcome of your application/i.test(s)) return null
 
   // "<Company> - Your Feedback Report", "<Company>: Application update"
   const prefixMatch = s.match(/^(.{2,40}?)\s*[-|:]\s*(?:your|application|feedback|online|video|interview|assessment|graduate|campus)/i)
@@ -400,8 +418,9 @@ function extractSubjectCompany(subject) {
     if (c) return c
   }
 
-  // "COMPANY Graduate Program", "COMPANY Internship Program"
-  const programMatch = s.match(/^(.{3,40}?)\s+(?:graduate\s+program|internship\s+program|graduate\s+scheme|early\s+career\s+program)/i)
+  // "COMPANY Graduate Program/Programme/Scheme/Academy/Pathway/Pool"
+  // Includes "Graduate Academy" (Quantium), "Graduate Pathway" (some banks), etc.
+  const programMatch = s.match(/^(.{3,40}?)\s+(?:graduate\s+(?:program|programme|scheme|academy|pathway|pool|cadetship)|internship\s+(?:program|programme)|early\s+career\s+program)/i)
   if (programMatch) {
     const c = sanitiseCompanyName(programMatch[1])
     if (c) return c
@@ -414,6 +433,15 @@ function extractSubjectCompany(subject) {
     if (c) return c
   }
 
+  // "Thanks/Thank you for your interest in <Company>!"
+  // Recruiter-routed emails (Lever / Greenhouse) often only mention the real
+  // employer in the subject; the from-domain is the ATS.
+  const interestInMatch = s.match(/(?:thanks?\s+(?:you\s+)?for\s+(?:your\s+)?interest\s+in|interested\s+in)\s+([A-Za-z][A-Za-z0-9&.\- ]{1,40}?)\s*[!.?]?\s*$/i)
+  if (interestInMatch) {
+    const c = sanitiseCompanyName(interestInMatch[1])
+    if (c) return c
+  }
+
   // "Application Outcome - 2026 Graduate ... at <Company>"
   const atMatch = s.match(/\bat\s+([A-Za-z][A-Za-z0-9&.\- ]{1,35}?)(?:\s*[-|:,(]|\s*$)/i)
   if (atMatch) {
@@ -421,7 +449,19 @@ function extractSubjectCompany(subject) {
     if (c) return c
   }
 
-  // "Next Steps ... for the NBN Graduate Program"
+  // "<Company> for <Role>" — e.g. "ResMed for Student Intern - Software Engineer".
+  // Capture only when the leading token clearly looks like a brand (TitleCase /
+  // ALLCAPS with no spaces, optional CamelCase). This avoids dragging in
+  // generic prefixes like "Application for ...".
+  const xForRoleMatch = s.match(/^([A-Z][A-Za-z0-9&.]{2,30})\s+for\s+/)
+  if (xForRoleMatch) {
+    const c = sanitiseCompanyName(xForRoleMatch[1])
+    if (c) return c
+  }
+
+  // "Next Steps ... for the NBN Graduate Program".
+  // We rely on isNoisyCompanyLabel (via sanitiseCompanyName) to reject generic
+  // role-modifier captures like "student" / "senior".
   const forProgramMatch = s.match(/\bfor\s+(?:the\s+)?([A-Za-z][A-Za-z0-9&.\- ]{1,28}?)\s+(?:graduate|intern|program|programme|role|position)\b/i)
   if (forProgramMatch) {
     const c = sanitiseCompanyName(forProgramMatch[1])
@@ -438,13 +478,36 @@ function extractSubjectCompany(subject) {
   return null
 }
 
+// Words that strongly imply "this is a company name, not a person".
+const COMPANY_INDICATOR_WORDS = new Set([
+  'company', 'companies', 'corp', 'corporation', 'inc', 'incorporated',
+  'ltd', 'limited', 'llc', 'plc', 'gmbh', 'pty',
+  'group', 'holdings', 'holding', 'bank', 'banking',
+  'tech', 'technologies', 'technology', 'solutions', 'industries', 'industry',
+  'systems', 'system', 'labs', 'lab', 'software', 'hardware',
+  'services', 'service', 'consulting', 'consultancy', 'agency',
+  'partners', 'associates', 'capital', 'ventures', 'fund', 'asset', 'assets',
+  'networks', 'network', 'media', 'digital', 'global', 'international',
+  'insurance', 'financial', 'finance', 'securities', 'investments', 'investment',
+  'advisors', 'advisor', 'enterprises', 'enterprise',
+  'telecom', 'telecoms', 'telecommunications', 'recruitment', 'recruiting',
+  'hiring', 'talent', 'careers', 'career', 'jobs', 'graduates', 'graduate',
+  'department', 'team', 'firm', 'studio', 'works', 'power', 'energy',
+  'health', 'healthcare', 'pharma', 'pharmaceutical', 'biotech',
+  'automotive', 'aerospace', 'defence', 'defense', 'retail', 'education',
+  'university', 'institute', 'foundation', 'commonwealth', 'mutual',
+  'radar', 'finance', 'mining', 'resources', 'materials',
+])
+
 function looksLikePersonName(name) {
   if (!name) return false
   const cleaned = name.replace(/[^A-Za-z\s'-]/g, ' ').replace(/\s+/g, ' ').trim()
   const parts = cleaned.split(' ').filter(Boolean)
   if (parts.length < 2 || parts.length > 3) return false
   const allTitleCase = parts.every(p => /^[A-Z][a-z'-]+$/.test(p))
-  return allTitleCase
+  if (!allTitleCase) return false
+  // If any word reads as a company indicator, this is a brand, not a person.
+  return !parts.some(p => COMPANY_INDICATOR_WORDS.has(p.toLowerCase()))
 }
 
 function looksLikeNonCompanyLabel(name) {
@@ -456,13 +519,43 @@ function looksLikeNonCompanyLabel(name) {
   return false
 }
 
+// Heuristics for ATS tenant slugs that should NOT be returned as a company.
+// Examples seen in the wild:
+//   wd5-impl-services1.myworkday.com → "wd5-impl-services1" → tenant code
+//   productsdc66pr1.workday.com      → "productsdc66pr1"    → tenant code
+//   anz.greenhouse.io                → "anz"                → could be tenant
+//   hire.lever.co                    → "hire"               → ATS subdomain
+function looksLikeAtsTenantSlug(part) {
+  const p = String(part || '').toLowerCase()
+  if (!p) return true
+  // Mixed letters+digits with digits in the middle/end → almost certainly a tenant code.
+  if (/^[a-z]{2,}\d+[a-z0-9-]*$/.test(p)) return true
+  if (/^[a-z]+-\w*\d+\w*$/.test(p)) return true
+  if (/\bdc\d+/.test(p) || /\bwd\d+/.test(p)) return true
+  // Generic ATS subdomain prefixes
+  if (['hire', 'jobs', 'careers', 'apply', 'recruit', 'recruiting', 'talent', 'ats', 'taleo', 'mail', 'email', 'noreply', 'no-reply'].includes(p)) return true
+  return false
+}
+
 function extractCompanyFromDomain(from) {
   const emailMatch = from.match(/@([\w.-]+)/)
   if (!emailMatch) return null
-  const parts = emailMatch[1].split('.')
+  const fullDomain = emailMatch[1].toLowerCase()
+  const parts = fullDomain.split('.')
+  const TLDS = ['com', 'au', 'co', 'uk', 'gov', 'edu', 'org', 'net', 'io', 'ai', 'us', 'nz', 'sg', 'in']
+  // If the right-most labels match a known ATS (e.g. greenhouse.io, lever.co,
+  // workday.com, myworkday.com), the left-most label is a tenant slug, not the
+  // employer. Returning null forces the caller to fall back to subject parsing.
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (ATS_DOMAIN_PARTS.has(parts[i])) {
+      // Everything before the ATS label is a tenant slug — don't trust it.
+      return null
+    }
+  }
   const name = parts.find(p =>
-    !ATS_DOMAIN_PARTS.has(p.toLowerCase()) &&
-    !['com', 'au', 'co', 'uk', 'gov', 'edu', 'org', 'net'].includes(p.toLowerCase()) &&
+    !ATS_DOMAIN_PARTS.has(p) &&
+    !TLDS.includes(p) &&
+    !looksLikeAtsTenantSlug(p) &&
     p.length > 2
   )
   if (!name) return null
@@ -478,9 +571,7 @@ function extractCompany(from, subject = '', bodyText = '') {
     if (co) return co
   }
 
-  // Subject signal is often cleaner than noisy sender labels.
   const subjectName = extractSubjectCompany(subject)
-  if (subjectName) return subjectName
 
   // 1. Display name (most reliable when present)
   let displayName = null
@@ -495,13 +586,25 @@ function extractCompany(from, subject = '', bodyText = '') {
   }
 
   if (displayName) {
-    // Prefer subject-derived employer name when display name looks like a person.
+    // Recruiter personal names are not company names. If we cannot find a
+    // better source, fall through to subject inference / "Unknown" — never
+    // return the recruiter's name as the company.
+    if (looksLikePersonName(displayName)) {
+      if (subjectName && !isNoisyCompanyLabel(subjectName)) return subjectName
+      const domainName = extractCompanyFromDomain(from)
+      if (domainName) return domainName
+      return null
+    }
+    // Prefer domain company when display name is noisy.
     if (looksLikeNonCompanyLabel(displayName)) {
       const domainName = extractCompanyFromDomain(from)
       if (domainName) return domainName
     }
     return displayName
   }
+
+  // Use subject-derived company only when we don't have a better sender label.
+  if (subjectName && !isNoisyCompanyLabel(subjectName)) return subjectName
 
   // 3. Email local-part hint: "nabearlycareertalent@..." → extract leading word before "early/careers/talent/jobs"
   const localMatch = from.match(/^[^@]*?([a-z]{2,8})(?:early|careers?|talent|jobs?|grads?|recruit)\b/i)
@@ -522,6 +625,20 @@ function extractCompany(from, subject = '', bodyText = '') {
 //   'none'     — nothing useful extracted
 function extractRole(subject, company, bodyText = '') {
   const fullText = `${subject} ${bodyText}`
+
+  // Outcome format: "Outcome of your application for the Graduate Program | X | Y"
+  const outcomeRoleInSubject = subject.match(/outcome of your application for (?:the\s+)?([^\n\r]{8,140})/i)
+  if (outcomeRoleInSubject) {
+    const cleaned = cleanRoleText(outcomeRoleInSubject[1].trim().replace(/\s+/g, ' '))
+    if (cleaned) return { role: cleaned.slice(0, 100), roleSource: 'explicit' }
+  }
+
+  // Body format: "... application for Graduate Program | X | Y."
+  const outcomeRoleInBody = bodyText.match(/application for\s+([^\n\r.]{8,140}\|[^\n\r.]{3,140})/i)
+  if (outcomeRoleInBody) {
+    const cleaned = cleanRoleText(outcomeRoleInBody[1].trim().replace(/\s+/g, ' '))
+    if (cleaned) return { role: cleaned.slice(0, 100), roleSource: 'explicit' }
+  }
 
   // SEEK confirmation body: "Your application for ROLE was successfully submitted to COMPANY"
   // This is the most reliable signal — SEEK's format is highly consistent
@@ -557,6 +674,35 @@ function extractRole(subject, company, bodyText = '') {
     return { role: cleaned.slice(0, 100), roleSource: 'explicit' }
   }
 
+  // SuccessFactors/HR template: "interest in the position of <Role>."
+  const interestInPositionMatch = bodyText.match(/interest in the position of\s+([^\n\r.]{6,140})/i)
+  if (interestInPositionMatch) {
+    const cleaned = cleanRoleText(interestInPositionMatch[1].trim().replace(/\s+/g, ' '))
+    if (cleaned) return { role: cleaned.slice(0, 100), roleSource: 'explicit' }
+  }
+
+  // Generic "interest in <Role> at <Company>" / "interest in <Role> with <Company>"
+  // Used by Citadel-style rejections that don't include the role in the subject.
+  // Captures e.g. "FPGA Engineering" out of "Thank you for your interest in
+  // FPGA Engineering at Citadel | Citadel Securities."
+  const interestInAtMatch = bodyText.match(/(?:thanks?\s+(?:you\s+)?for\s+your\s+)?interest\s+in\s+([A-Z][^.\n\r]{3,80}?)\s+(?:at|with)\s+/i)
+  if (interestInAtMatch) {
+    const candidate = cleanRoleText(interestInAtMatch[1].trim().replace(/\s+/g, ' '))
+    // Skip generic phrases like "our company" / "the position".
+    if (candidate && !/^(our|the|this|a|an)\b/i.test(candidate) && candidate.length >= 4) {
+      return { role: candidate.slice(0, 100), roleSource: 'explicit' }
+    }
+  }
+
+  // Citadel-style decision body: "moving forward with your candidacy for <Role> at <Company>"
+  const candidacyForMatch = bodyText.match(/(?:candidacy|application)\s+for\s+([A-Z][^.\n\r]{3,80}?)\s+at\s+/i)
+  if (candidacyForMatch) {
+    const candidate = cleanRoleText(candidacyForMatch[1].trim().replace(/\s+/g, ' '))
+    if (candidate && candidate.length >= 4) {
+      return { role: candidate.slice(0, 100), roleSource: 'explicit' }
+    }
+  }
+
   // Subject-based: strip everything after common stage separators
   let role = subject
     .split(/\s*[–—]\s*(?:progress(?:ing)?\s+to|online\s+assessment|video\s+interview|assessment\s+cent|phone\s+interview|next\s+stage|we\s+regret|congratul|offer|application\s+(?:status|update)|invited?\s+to|update\s+on)/i)[0]
@@ -581,6 +727,10 @@ function extractRole(subject, company, bodyText = '') {
       role = role.slice(company.length).replace(/^[\s,:\-]+/, '').trim()
     }
   }
+
+  // Strip leading conjunctive words that survive the company-prefix removal,
+  // e.g. "for Student Intern - Software Engineer" → "Student Intern - Software Engineer".
+  role = role.replace(/^(?:for|to|the|a|an)\s+/i, '').trim()
 
   // Truncate at a word boundary to keep it readable
   if (role.length > 60) {
@@ -608,6 +758,43 @@ function significantTokens(s) {
     .filter(t => !['group', 'team', 'program', 'programme', 'role', 'intern', 'internship', 'graduate'].includes(t))
 }
 
+// Strong differentiator tokens — when one role has one of these and the other
+// has a *different* one (e.g. FPGA vs Software), they describe different jobs
+// at the same company and should NOT be merged.
+const ROLE_DIFFERENTIATORS = new Set([
+  'software', 'hardware', 'fpga', 'firmware', 'embedded',
+  'frontend', 'backend', 'fullstack', 'mobile', 'ios', 'android', 'web',
+  'cloud', 'devops', 'sre', 'platform', 'infrastructure',
+  'data', 'analytics', 'analyst', 'ml', 'ai', 'machine', 'learning',
+  'research', 'scientist', 'security', 'cyber',
+  'quant', 'trader', 'trading', 'finance', 'risk', 'audit', 'tax',
+  'forensic', 'actuarial', 'consulting', 'consult',
+  'product', 'design', 'designer', 'marketing', 'sales', 'operations',
+  'tutor', 'corporate', 'investment', 'legal', 'mechanical', 'electrical',
+  'civil', 'chemical', 'aerospace', 'biomedical', 'algorithm', 'algorithms',
+])
+
+function hasConcreteRoleSignal(role = '') {
+  const r = String(role || '').toLowerCase()
+  if (!r || isNoisyRole(r)) return false
+  for (const tok of significantTokens(r)) {
+    if (ROLE_DIFFERENTIATORS.has(tok)) return true
+  }
+  return false
+}
+
+// True when both roles look concrete AND each has at least one differentiator
+// the other lacks (e.g. {fpga,engineering} vs {software,engineering,campus}
+// → fpga vs software → clearly different).
+function rolesClearlyDiffer(roleA, roleB) {
+  if (!hasConcreteRoleSignal(roleA) || !hasConcreteRoleSignal(roleB)) return false
+  const a = new Set(significantTokens(roleA))
+  const b = new Set(significantTokens(roleB))
+  const aOnly = [...a].filter(t => !b.has(t) && ROLE_DIFFERENTIATORS.has(t))
+  const bOnly = [...b].filter(t => !a.has(t) && ROLE_DIFFERENTIATORS.has(t))
+  return aOnly.length > 0 && bOnly.length > 0
+}
+
 function matchToApplication(company, applications, role = '') {
   if (!company || !applications.length) return null
   const c = normaliseStr(company)
@@ -623,9 +810,14 @@ function matchToApplication(company, applications, role = '') {
   }
 
   // 2. Company-only match (includes substring — handles "Company Early" ↔ "Company")
+  // BUT: if both the email and the saved app have a concrete (non-noisy) role
+  // and they share zero significant tokens, treat as a different position and
+  // skip this fallback so two unrelated emails don't merge under the same app.
   for (const app of applications) {
     const a = normaliseStr(app.company)
-    if (a.includes(c) || c.includes(a)) return app.id
+    if (!(a.includes(c) || c.includes(a))) continue
+    if (rolesClearlyDiffer(role, app.role)) continue
+    return app.id
   }
 
   // 3. Token-overlap fallback for noisy ATS-derived company names
@@ -636,7 +828,10 @@ function matchToApplication(company, applications, role = '') {
     const appRoleTokens = significantTokens(app.role || '')
     const companyOverlap = companyTokens.filter(t => appCompanyTokens.includes(t)).length
     const roleOverlap = roleTokens.filter(t => appRoleTokens.includes(t)).length
-    if (companyOverlap >= 1 && (roleTokens.length === 0 || roleOverlap >= 1)) return app.id
+    if (companyOverlap >= 1 && (roleTokens.length === 0 || roleOverlap >= 1)) {
+      if (rolesClearlyDiffer(role, app.role)) continue
+      return app.id
+    }
   }
   return null
 }

@@ -329,4 +329,167 @@ describe('classifyEmails', () => {
     expect(results).toHaveLength(1)
     expect(results[0].company).toBe('Francomgroup')
   })
+
+  it('extracts rejected outcome role and company from outcome wording', async () => {
+    const emails = [
+      {
+        id: 'consult-outcome-1',
+        subject: 'Outcome of your application for the Graduate Program | Risk & Analytics | Forensic Tech',
+        snippet: "We won't be progressing your application for this role.",
+        bodyText: "Thank you for your interest. We won't be progressing your application for this role - but we would like to keep your application for future opportunities.",
+        from: 'Consulting Firm Recruitment <no-reply@consultingfirm.example>',
+        date: '2026-04-29T06:31:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Consulting Firm')
+    expect(results[0].detectedStage).toBe('Rejected')
+    expect(results[0].role).toContain('Forensic Tech')
+  })
+
+  it('keeps multiple rejected roles as separate entries for one company', async () => {
+    const emails = [
+      {
+        id: 'consult-r1',
+        subject: 'Outcome of your application for the Graduate Program | Risk & Analytics | Data Analytics',
+        snippet: "We won't be progressing your application for this role.",
+        from: 'Consulting Firm Recruitment <no-reply@consultingfirm.example>',
+        date: '2026-04-29T06:31:00.000Z',
+      },
+      {
+        id: 'consult-r2',
+        subject: 'Outcome of your application for the Graduate Program | Risk & Analytics | Forensic Tech',
+        snippet: "We won't be progressing your application for this role.",
+        from: 'Consulting Firm Recruitment <no-reply@consultingfirm.example>',
+        date: '2026-04-17T06:31:00.000Z',
+      },
+      {
+        id: 'consult-r3',
+        subject: 'Outcome of your application for the Graduate Program | Risk & Analytics | Actuarial',
+        snippet: "We won't be progressing your application for this role.",
+        from: 'Consulting Firm Recruitment <no-reply@consultingfirm.example>',
+        date: '2026-04-17T01:31:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(3)
+    expect(new Set(results.map(r => r.company)).size).toBe(1)
+    expect(new Set(results.map(r => r.role)).size).toBe(3)
+    expect(results.every(r => r.detectedStage === 'Rejected')).toBe(true)
+  })
+
+  it('does not merge two emails for the same company when roles clearly differ (Citadel FPGA vs Software)', async () => {
+    const apps = [{ id: 'app-citadel', company: 'Citadel', role: 'Software Engineering Campus Assessment' }]
+    const emails = [
+      {
+        id: 'cit-oa',
+        subject: 'Your invite to [Citadel | Citadel Securities] Software Engineering Campus Assessment 2025 – 2026 expires in 7 days',
+        snippet: 'Powered by HackerRank.',
+        bodyText: 'Friendly reminder. End Login Date/Time: 11 May 2026 06:40 PM CDT (America - Chicago)',
+        from: 'Citadel Hiring Team <support@hackerrankforwork.com>',
+        date: '2026-05-05T00:00:00.000Z',
+      },
+      {
+        id: 'cit-fpga',
+        subject: 'Your Citadel | Citadel Securities Application',
+        snippet: 'Thank you for your interest in FPGA Engineering at Citadel | Citadel Securities.',
+        bodyText: 'Thank you for your interest in FPGA Engineering at Citadel | Citadel Securities. Our team has carefully considered your application and unfortunately will not be moving forward with your candidacy for FPGA Engineering at this time.',
+        from: 'Bruna Diegues <bruna.diegues@citadel.com>',
+        date: '2026-05-04T00:00:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, apps, [])
+    expect(results).toHaveLength(2)
+    const oa = results.find(r => r.detectedStage === 'Online Assessment')
+    const rej = results.find(r => r.detectedStage === 'Rejected')
+    expect(oa).toBeDefined()
+    expect(rej).toBeDefined()
+    expect(oa.appId).toBe('app-citadel')
+    expect(rej.appId).toBeNull()
+    expect(rej.role).toBe('FPGA Engineering')
+  })
+
+  it('extracts company from "<Company> Graduate Academy" subject (ANZ Greenhouse → Quantium)', async () => {
+    const emails = [
+      {
+        id: 'q1',
+        subject: 'Quantium Graduate Academy Application Outcome',
+        snippet: 'After careful consideration, we regret to inform you that your application has been unsuccessful.',
+        bodyText: 'Thank you for taking part in our Graduate Academy recruitment process. After careful consideration, we regret to inform you that your application has been unsuccessful.',
+        from: 'Quantium Graduate Academy <no-reply@anz.greenhouse.io>',
+        date: '2026-05-07T02:17:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Quantium')
+    expect(results[0].detectedStage).toBe('Rejected')
+  })
+
+  it('uses subject company over recruiter person name when ATS tenant subdomain shadows employer (Lever)', async () => {
+    const emails = [
+      {
+        id: 'r1',
+        subject: 'Thanks for your interest in Ideagen!',
+        snippet: 'Thank you for applying.',
+        bodyText: 'Thank you for applying for the position with Ideagen.',
+        from: 'Jasmine Perkins <jasmine.perkins@hire.lever.co>',
+        date: '2026-05-01T00:00:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Ideagen')
+  })
+
+  it('extracts company from "<Company> for <Role>" subject and rejects "Student" as a company', async () => {
+    const emails = [
+      {
+        id: 's1',
+        subject: 'ResMed for Student Intern - Software Engineer',
+        snippet: 'Your application has been received.',
+        bodyText: 'Thank you for applying.',
+        from: 'do-not-reply@productsdc66pr1.workday.com',
+        date: '2026-05-02T00:00:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('ResMed')
+    expect(results[0].role).not.toMatch(/^for\b/i)
+  })
+
+  it('extracts role from "interest in <Role> at <Company>" body template', async () => {
+    const emails = [
+      {
+        id: 'fpga-only',
+        subject: 'Your Application',
+        bodyText: 'Thank you for your interest in FPGA Engineering at Citadel | Citadel Securities. Unfortunately we are unable to proceed.',
+        from: 'Bruna Diegues <bruna.diegues@citadel.com>',
+        date: '2026-05-04T00:00:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results[0].role).toBe('FPGA Engineering')
+    expect(results[0].roleSource).toBe('explicit')
+  })
+
+  it('extracts role from "interest in the position of" body template', async () => {
+    const emails = [
+      {
+        id: 'capgemini-1',
+        subject: 'Capgemini Group - New Job Application Received',
+        snippet: 'Thank you for your application and interest in the position of Capgemini AUNZ Graduate Program 2026: July/August Start.',
+        bodyText: 'Thank you for your application and interest in the position of Capgemini AUNZ Graduate Program 2026: July/August Start. Our Talent Acquisition Team will review your application.',
+        from: 'HR System <hrsystem@capgemini.com>',
+        date: '2026-04-30T12:09:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Capgemini')
+    expect(results[0].role).toContain('Capgemini AUNZ Graduate Program 2026')
+    expect(results[0].role).not.toMatch(/new job application received/i)
+  })
 })
