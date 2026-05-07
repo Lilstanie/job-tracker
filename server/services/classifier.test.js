@@ -427,6 +427,51 @@ describe('classifyEmails', () => {
     expect(results[0].detectedStage).toBe('Rejected')
   })
 
+  it('classifies iCIMS polite rejection as Rejected despite thank-you opener (Ideagen)', async () => {
+    const emails = [
+      {
+        id: 'ideagen-icims',
+        subject: 'Thanks for your interest in Ideagen!',
+        snippet: 'Thank you for applying to Ideagen',
+        bodyText: `Dear Ziqi,
+
+Thank you for applying to Ideagen – we really appreciate your interest.
+
+Following on from your recent application for Graduate Programme Trainee, after reviewing your application against the role specification we have decided on this occasion not to progress your application to the next stage.
+
+Due to application volumes, we are unable to provide individual feedback at this stage.`,
+        from: 'Jasmine Perkins <ideagen+email+5165-f059405c40@talent.icims.eu>',
+        date: '2026-05-06T23:32:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Ideagen')
+    expect(results[0].detectedStage).toBe('Rejected')
+    expect(results[0].summary).toBe('Application unsuccessful')
+  })
+
+  it('classifies Workday polite rejection as Rejected despite thank-you opener (ResMed)', async () => {
+    const emails = [
+      {
+        id: 'resmed-wd',
+        subject: 'ResMed application update for Student Intern - Software Engineer',
+        snippet: 'Thank you for your interest in employment with ResMed',
+        bodyText: `Dear Stan,
+
+Thank you for your interest in employment with ResMed in our Student Intern - Software Engineer position.
+
+At this time, we've decided to pursue other candidates who more closely match the job requirements of this position.`,
+        from: 'Workday <resmed@myworkday.com>',
+        date: '2026-05-06T17:29:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('ResMed')
+    expect(results[0].detectedStage).toBe('Rejected')
+  })
+
   it('uses subject company over recruiter person name when ATS tenant subdomain shadows employer (Lever)', async () => {
     const emails = [
       {

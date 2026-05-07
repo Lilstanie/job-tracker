@@ -24,6 +24,13 @@ const STAGE_RULES = [
       /not a match for what we(?:'|’)re looking for/i,
       /not a match for what we are looking for/i,
       /won(?:'|’)t be progressing your application/i,
+      // Polite HR templates: thanks in subject/body but decline in body (iCIMS, Workday, etc.)
+      /not to progress your application/i,
+      /not to progress.{0,80}next stage/i,
+      /decided on this occasion not to/i,
+      /pursue other candidates/i,
+      /decided to pursue other candidates/i,
+      /other candidates who more closely match/i,
     ],
   },
   {
@@ -85,6 +92,20 @@ function detectStage(subject, snippet) {
   const text = `${subject} ${snippet}`
   const likelyMarketingOffer = /\boffer\b/i.test(text) && /(linkedin premium|discount|% off|save\s+\d+%|months?\s+of\s+premium|newsletter)/i.test(text)
   if (likelyMarketingOffer) return { stage: 'Applied', confidence: 'low' }
+
+  // Many rejections open with "Thank you for applying" / "Thanks for your interest"
+  // but then decline — run explicit decline phrases before Applied heuristics.
+  const politeRejectionPatterns = [
+    /not to progress your application/i,
+    /not to progress.{0,80}next stage/i,
+    /decided on this occasion not to/i,
+    /pursue other candidates/i,
+    /decided to pursue other candidates/i,
+    /other candidates who more closely match/i,
+  ]
+  if (politeRejectionPatterns.some(p => p.test(text))) {
+    return { stage: 'Rejected', confidence: 'high' }
+  }
 
   const hasAssessmentSignal = /online assessment|online assessments|assessment invitation|complete your online assessments|complete.*assessment|hackerrank|codility|pymetrics|hirevue|korn ferry/i.test(text)
   const hasInterviewSignal = /video interview|phone interview|telephone interview|interview invitation|invited.*interview|schedule.*interview|interview.*schedule/i.test(text)
