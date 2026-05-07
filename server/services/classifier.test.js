@@ -427,6 +427,90 @@ describe('classifyEmails', () => {
     expect(results[0].detectedStage).toBe('Rejected')
   })
 
+  it('extracts company from HireVue display name and never returns "hirevue-app" as company', async () => {
+    const emails = [
+      {
+        id: 'hv-1',
+        subject: 'You are invited to a Video Interview with Quantium',
+        snippet: 'Thank you for your interest in the Graduate Software Engineer - 2027 position at Quantium.',
+        bodyText: 'Hello Ziqi He, Thank you for your interest in the Graduate Software Engineer - 2027 position at Quantium. You are invited to complete a Values-Based Video Interview. Once you log in, you will have 48 hour(s) to submit.',
+        from: 'Quantium Graduate Recruitment <noreply@mail.hirevue-app.com.au>',
+        date: '2026-04-19T13:52:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Quantium')
+    expect(results[0].company).not.toMatch(/hirevue/i)
+    expect(results[0].role).toBe('Graduate Software Engineer - 2027')
+    expect(results[0].detectedStage).toBe('Video Interview')
+    expect(results[0].dueDate).toBe('2026-04-21')
+  })
+
+  it('extracts due date from "you will have 48 hour(s) to submit" relative deadline', () => {
+    const due = extractDueDate(
+      'You are invited to a Video Interview with Quantium',
+      'Once you log in, you will have 48 hour(s) to submit.',
+      '2026-04-19T13:52:00.000Z',
+      'Australia/Sydney'
+    )
+    expect(due).toBe('2026-04-21')
+  })
+
+  it('merges Quantium HireVue VI emails with ANZ Greenhouse rejection into one timeline', async () => {
+    const emails = [
+      {
+        id: 'q-vi-invite',
+        subject: 'You are invited to a Video Interview with Quantium',
+        snippet: 'Graduate Software Engineer - 2027 position at Quantium.',
+        bodyText: 'Hello Ziqi He, Thank you for your interest in the Graduate Software Engineer - 2027 position at Quantium. You will have 48 hour(s) to submit.',
+        from: 'Quantium Graduate Recruitment <noreply@mail.hirevue-app.com.au>',
+        date: '2026-04-19T13:52:00.000Z',
+      },
+      {
+        id: 'q-vi-submitted',
+        subject: 'Thank you for submitting your Interview',
+        snippet: 'reviewing your responses',
+        bodyText: 'Dear Ziqi He, The Quantium Graduate Recruitment team is currently reviewing your responses. Thank you for your interest in Quantium.',
+        from: 'Quantium Submittals <noreply@mail.hirevue-app.com.au>',
+        date: '2026-04-19T09:38:00.000Z',
+      },
+      {
+        id: 'q-rej',
+        subject: 'Quantium Graduate Academy Application Outcome',
+        snippet: 'we regret to inform you that your application has been unsuccessful',
+        bodyText: 'Dear Ziqi, Thank you for taking part in our Graduate Academy recruitment process. After careful consideration, we regret to inform you that your application has been unsuccessful. Due to the volume of applications received, we are unfortunately unable to provide individual feedback at this time.',
+        from: 'Quantium Graduate Academy <no-reply@anz.greenhouse.io>',
+        date: '2026-05-07T02:17:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Quantium')
+    expect(results[0].detectedStage).toBe('Rejected')
+    expect(results[0].role).toMatch(/graduate software engineer/i)
+    expect(results[0].sourceEmails).toHaveLength(3)
+    expect(results[0].dueDate).toBe('2026-04-21')
+    expect(results[0].assessmentStatus).toBe('completed')
+  })
+
+  it('extracts role from "interest in the <Role> position at <Company>" body template', async () => {
+    const emails = [
+      {
+        id: 'pos-1',
+        subject: 'Application',
+        snippet: 'Graduate Software Engineer - 2027 position at Quantium',
+        bodyText: 'Thank you for your interest in the Graduate Software Engineer - 2027 position at Quantium.',
+        from: 'Quantium Graduate Recruitment <noreply@mail.hirevue-app.com.au>',
+        date: '2026-04-19T00:00:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results[0].company).toBe('Quantium')
+    expect(results[0].role).toBe('Graduate Software Engineer - 2027')
+    expect(results[0].roleSource).toBe('explicit')
+  })
+
   it('classifies iCIMS polite rejection as Rejected despite thank-you opener (Ideagen)', async () => {
     const emails = [
       {

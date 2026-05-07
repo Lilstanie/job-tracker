@@ -159,11 +159,26 @@ function cleanCompanyText(raw = '') {
     .trim()
 }
 
+// True for umbrella program labels that could refer to many specific positions
+// at the same company, e.g. "Graduate Academy", "Internship Programme", "2027
+// Graduate Pathway". Treated as noisy so a concrete sibling absorbs them.
+const UMBRELLA_ROLE_RE = /^(?:\d{4}\s+)?(?:graduate|internship|intern|early\s+career|cadetship|trainee|campus)\s+(?:program|programme|scheme|academy|pathway|pool|recruitment|cadetship)\s*$/i
+
+function isUmbrellaRole(role = '') {
+  const r = cleanRoleText(role).toLowerCase().trim()
+  if (!r) return false
+  return UMBRELLA_ROLE_RE.test(r)
+}
+
 function isNoisyRole(role = '') {
   const r = cleanRoleText(role).toLowerCase()
   if (!r) return true
   if (r.length < 6) return true
-  return /^(application|application outcome|application update|thank you|thanks|job|email|mail|reminder)$/i.test(r)
+  if (/^(application|application outcome|application update|thank you|thanks|job|email|mail|reminder)$/i.test(r)) return true
+  // Sentence-like fillers that are not a real role label
+  if (/^(?:thanks?\s+(?:you\s+)?for|thank\s+you|you\s+are\s+invited|invited\s+to|update\s+on|reminder|next\s+steps?|application\s+(?:outcome|received|update|status))\b/i.test(r)) return true
+  if (UMBRELLA_ROLE_RE.test(r)) return true
+  return false
 }
 
 function isNoisyCompanyLabel(name = '') {
@@ -245,9 +260,10 @@ function parseRelativeDeadline(text, emailDate) {
   if (isNaN(base.getTime())) return null
 
   const patterns = [
-    /\byou(?:\s+only)?\s+have\s+(\d+)\s*(hours?|days?)/i,             // "you only have 72 hours"
-    /\byou(?:'ll)?\s+have\s+(\d+)\s*(hours?|days?)/i,               // "you'll have 72 hours"
-    /\b(\d+)\s*(hours?|days?)\s+to\s+(?:complete|respond|access|finish|submit)/i, // "72 hours to complete"
+    // "you only / will / 'll / may / might have 72 hours"
+    /\byou(?:'ll|\s+(?:only|will|may|might))?\s+have\s+(\d+)\s*(hours?|days?)/i,
+    // "48 hour(s) to submit" — accepts the literal "(s)" plural suffix HireVue uses
+    /\b(\d+)\s*(hours?|days?)(?:\(s\))?\s+to\s+(?:complete|respond|access|finish|submit)/i,
     /(?:complete|submit|respond|access).{0,25}within\s+(\d+)\s*(hours?|days?)/i,  // "complete within 48 hours"
     /within\s+(\d+)\s*(hours?|days?)/i,                              // "within 3 days"
     /(\d+)[- ](hour|day)\s+(?:window|deadline|limit)/i,              // "72-hour window"
@@ -362,10 +378,11 @@ export function extractDueDate(subject, snippet, emailDate = null, userTimeZone 
 // Domain parts that belong to ATS/assessment platforms — never the actual employer
 const ATS_DOMAIN_PARTS = new Set([
   'jobadder', 'greenhouse', 'workday', 'lever', 'smartrecruiters', 'taleo', 'icims',
-  'gradweb', 'gradweb1', 'weareamberjack', 'hirevue', 'pymetrics', 'shl', 'fusiongc',
+  'gradweb', 'gradweb1', 'weareamberjack', 'hirevue', 'hirevue-app', 'pymetrics', 'shl', 'fusiongc',
   'hackerrank', 'codility', 'cut', 'aon', 'korn', 'kornferry', 'criteriacorp',
   'hiredscore', 'vervoe', 'bamboohr', 'recruitee', 'jobvite', 'successfactors',
   'applytojob', 'recruitcrm', 'seek', 'linkedin', 'indeed', 'talent', 'myworkdayjobs', 'myworkday',
+  'pageuppeople', 'pageup', 'avature', 'breezy', 'workable',
 ])
 
 const GENERIC_COMPANY_NAMES = new Set([
@@ -606,7 +623,9 @@ function extractCompany(from, subject = '', bodyText = '') {
   const displayMatch = from.match(/^"?([^"<]+)"?\s*</i)
   if (displayMatch) {
     let name = displayMatch[1].trim()
-      .replace(/\b(recruitment|recruiter|careers|career|talent|hr|hiring|team|noreply|no.reply|jobs?|apply|notifications?|early)\b/gi, '')
+      // Strip noisy role/program/contact suffix words that ATS tools tack on to the
+      // company name. e.g. "Quantium Graduate Recruitment" / "Quantium Submittals".
+      .replace(/\b(recruitment|recruiter|careers|career|talent|hr|hiring|team|noreply|no.reply|jobs?|apply|notifications?|early|graduates?|submittals?|submission|programmes?|programs?|academy|academies|internship|intern|scheme|pathway|pool|trainee|cadetship|onboarding|admin)\b/gi, '')
       .replace(/\s{2,}/g, ' ')
       .trim()
     const clean = sanitiseCompanyName(name)
@@ -707,6 +726,16 @@ function extractRole(subject, company, bodyText = '') {
   if (interestInPositionMatch) {
     const cleaned = cleanRoleText(interestInPositionMatch[1].trim().replace(/\s+/g, ' '))
     if (cleaned) return { role: cleaned.slice(0, 100), roleSource: 'explicit' }
+  }
+
+  // "interest in [the] <Role> position at <Company>" — HireVue/Workday templates
+  // e.g. "Thank you for your interest in the Graduate Software Engineer - 2027 position at Quantium."
+  const positionAtMatch = bodyText.match(/interest\s+in\s+(?:the\s+)?([A-Za-z0-9][^.\n\r]{2,90}?)\s+position\s+(?:at|with)\s+/i)
+  if (positionAtMatch) {
+    const candidate = cleanRoleText(positionAtMatch[1].trim().replace(/\s+/g, ' '))
+    if (candidate && !/^(our|the|this|a|an)\b/i.test(candidate) && candidate.length >= 4) {
+      return { role: candidate.slice(0, 100), roleSource: 'explicit' }
+    }
   }
 
   // Generic "interest in <Role> at <Company>" / "interest in <Role> with <Company>"
@@ -895,8 +924,33 @@ function mergeIntoGroup(existing, incoming) {
   // completed beats pending (any evidence of completion overrides)
   if (incoming.assessmentStatus === 'completed') existing.assessmentStatus = 'completed'
   else if (incoming.assessmentStatus === 'pending' && !existing.assessmentStatus) existing.assessmentStatus = 'pending'
+  // Prefer the most specific role label: replace umbrella/noisy with explicit
+  // when the incoming side has it.
+  const existingNoisy = isNoisyRole(existing.role ?? '') || isUmbrellaRole(existing.role ?? '')
+  const incomingNoisy = isNoisyRole(incoming.role ?? '') || isUmbrellaRole(incoming.role ?? '')
+  if (existingNoisy && !incomingNoisy && incoming.role) {
+    existing.role = incoming.role
+    if (incoming.roleSource) existing.roleSource = incoming.roleSource
+  }
   // Accumulate source emails
   existing.sourceEmails.push(incoming.sourceEmails[0])
+}
+
+// Two roles belong to the "same family" — i.e. they describe the same position
+// at the same company and should collapse into one timeline.
+function sameRoleFamily(a, b) {
+  const aRole = a?.role ?? ''
+  const bRole = b?.role ?? ''
+  // Both are too generic to disambiguate → assume same.
+  if (isNoisyRole(aRole) && isNoisyRole(bRole)) return true
+  // Exact role match (after cleanup).
+  if (normaliseStr(cleanRoleText(aRole)) === normaliseStr(cleanRoleText(bRole))) return true
+  // One side is umbrella / noisy → absorbs concrete sibling unless they
+  // contain different concrete role differentiators (e.g. FPGA vs Software).
+  const aSoft = isUmbrellaRole(aRole) || isNoisyRole(aRole)
+  const bSoft = isUmbrellaRole(bRole) || isNoisyRole(bRole)
+  if ((aSoft || bSoft) && !rolesClearlyDiffer(aRole, bRole)) return true
+  return false
 }
 
 function consolidateGroups(values) {
@@ -922,16 +976,24 @@ function consolidateGroups(values) {
   }
 
   for (const items of byCompany.values()) {
-    const terminal = items.find(i => i.detectedStage === 'Rejected' || i.detectedStage === 'Offer')
-    if (!terminal) continue
-    for (const item of items) {
-      if (item === terminal) continue
-      const sameRoleFamily =
-        (isNoisyRole(item.role ?? '') && isNoisyRole(terminal.role ?? '')) ||
-        normaliseStr(cleanRoleText(item.role ?? '')) === normaliseStr(cleanRoleText(terminal.role ?? ''))
-      if (sameRoleFamily) {
-        mergeIntoGroup(terminal, item)
-        terminal.hasFresh = terminal.hasFresh || item.hasFresh
+    if (items.length < 2) continue
+
+    // Pick a primary item to absorb others: prefer terminal stage (Rejected /
+    // Offer), then a concrete (non-noisy) role, then earliest entry.
+    const score = (i) => {
+      let s = 0
+      if (i.detectedStage === 'Rejected' || i.detectedStage === 'Offer') s += 1000
+      if (!isNoisyRole(i.role ?? '') && !isUmbrellaRole(i.role ?? '')) s += 100
+      return s
+    }
+    const sorted = [...items].sort((a, b) => score(b) - score(a))
+    const primary = sorted[0]
+
+    for (const item of sorted.slice(1)) {
+      if (item === primary || item.__drop) continue
+      if (sameRoleFamily(primary, item)) {
+        mergeIntoGroup(primary, item)
+        primary.hasFresh = primary.hasFresh || item.hasFresh
         item.__drop = true
       }
     }
@@ -945,9 +1007,11 @@ function consolidateGroups(values) {
 const COMPLETED_PATTERNS = [
   /feedback report/i,                          // post-OA feedback = definitely done
   /assessment.*feedback/i,
-  /thank you for (completing|attending|sitting)/i,
+  /thank you for (completing|attending|sitting|submitting)/i,
   /completed.{0,20}(assessment|interview|test)/i,
   /(assessment|interview|test).{0,20}(completed|submitted|received)/i,
+  /(submitting|submitted)\s+your\s+(?:video\s+)?(interview|assessment|application|response|test)/i,
+  /reviewing\s+your\s+(response|submission|interview|application)/i,
   /you have completed/i,
   /your performance/i,                         // "your performance across our key areas"
   /following (up on |your )?(recent )?interview/i,
