@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useMemo } from 'react'
 import { Briefcase, Plus } from 'lucide-react'
 import { STAGES, STAGE_COLORS } from '../data/mockData'
 import ApplicationCard from './ApplicationCard'
@@ -101,12 +101,17 @@ export default function KanbanBoard({ applications, onEdit, onDelete, onMove, on
     setDragOverStage(null)
   }, [onMove])
 
-  if (applications.length === 0) return <EmptyBoard onAdd={onAddFirst} />
+  // Group once (O(n)) into a stage→apps map instead of running
+  // applications.filter for every stage on every render (O(stages × n)).
+  const byStage = useMemo(() => {
+    const groups = Object.fromEntries(STAGES.map((s) => [s, []]))
+    for (const a of applications) {
+      if (groups[a.stage]) groups[a.stage].push(a)
+    }
+    return groups
+  }, [applications])
 
-  const byStage = STAGES.reduce((acc, s) => {
-    acc[s] = applications.filter(a => a.stage === s)
-    return acc
-  }, {})
+  if (applications.length === 0) return <EmptyBoard onAdd={onAddFirst} />
 
   return (
     <div className="flex gap-3 overflow-x-auto pb-4 flex-1" style={{ minHeight: 0 }}>

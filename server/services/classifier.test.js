@@ -895,6 +895,30 @@ At this time, we've decided to pursue other candidates who more closely match th
     }
   })
 
+  it('captures full long-form role with " - <Specialisation>" suffixes (Macquarie banking)', async () => {
+    // Real Macquarie rejection — role spec runs across multiple " - " separated
+    // segments. The lazy "applyMatch" used to stop at the first "Program" word
+    // and lose the specialisation. Continuation regex must extend until the
+    // sentence terminator (", we appreciate") and not bleed past the pipe in
+    // the subject ("(Sydney)| Macquarie Group").
+    const emails = [
+      {
+        id: 'macq-1',
+        subject: 'Update on your application for 2027 ANZ Graduate Program - Corporate Finance, M&A, Treasury and Markets - Macquarie Capital (Sydney)| Macquarie Group',
+        from: 'Macquarie Recruitment <talent@macquarie.com>',
+        bodyText: 'Hi Stan, Thank you for your application for our 2027 ANZ Graduate Program - Corporate Finance, M&A, Treasury and Markets - Macquarie Capital (Sydney), we appreciate the time you have committed to our process. We have received strong applications for this role and after careful consideration, we would like to advise that your application has been unsuccessful. Kind regards, Macquarie Recruitment Team',
+        snippet: 'Thank you for your application for our 2027 ANZ Graduate Program',
+        date: '2026-05-01T01:45:00.000Z',
+      },
+    ]
+    const { results } = await classifyEmails(emails, [], [])
+    expect(results).toHaveLength(1)
+    expect(results[0].company).toBe('Macquarie')
+    expect(results[0].detectedStage).toBe('Rejected')
+    // Full role spec preserved; "(Sydney)" stripped by cleanRoleText for stable grouping.
+    expect(results[0].role).toBe('2027 ANZ Graduate Program - Corporate Finance, M&A, Treasury and Markets - Macquarie Capital')
+  })
+
   it('keeps Test Analyst and QA / Test Engineer (SDET) as separate canonical roles', async () => {
     const emails = [
       {

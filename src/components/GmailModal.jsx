@@ -177,23 +177,26 @@ const CONFIDENCE_LEVELS = ['high', 'medium', 'low']
 const CONFIDENCE_COLORS = { high: '#22c55e', medium: '#f59e0b', low: '#6b7280' }
 
 // ─── View: results ─────────────────────────────────────────────────────────
+// NOTE: Parent passes `key={resultsKey}` so a fresh sync (different results
+// array reference) causes React to remount this component — that re-runs the
+// useState initialisers below. This is cleaner than resetting state inside an
+// effect (which the React 19+ purity rule discourages).
 function ResultsView({ results, emailCount, rawCount, skippedKnown, onApply, onClose, onResetHistory, autoAppliedCount, onPrintJson }) {
   // Default: show high + medium; auto-include low if there are no high/medium results
   const hasHighOrMedium = results.some(r => r.confidence === 'high' || r.confidence === 'medium')
   const [visibleLevels, setVisibleLevels] = useState(
     () => hasHighOrMedium ? new Set(['high', 'medium']) : new Set(['high', 'medium', 'low'])
   )
-
-  const visible = results
-    .map((r, i) => ({ ...r, _i: i }))
-    .filter(r => visibleLevels.has(r.confidence))
-
   const [selected, setSelected] = useState(
     () => new Set(results.map((_, i) => i).filter(i => {
       const conf = results[i]?.confidence
       return conf === 'high' || conf === 'medium' || !hasHighOrMedium
     }))
   )
+
+  const visible = results
+    .map((r, i) => ({ ...r, _i: i }))
+    .filter(r => visibleLevels.has(r.confidence))
 
   const toggleLevel = level => {
     setVisibleLevels(prev => {
@@ -461,6 +464,10 @@ function ResultRow({ result, index, checked, onToggle, unmatched }) {
 export default function GmailModal({ onClose, syncToken, profile, onConnected, onDisconnected, onSyncApply }) {
   const [view, setView] = useState('idle')
   const [results, setResults] = useState([])
+  // Bumps every time a new sync completes so <ResultsView key=…> remounts and
+  // the prior run's selections / level-filter state are wiped. Cleaner than a
+  // useEffect that resets state when `results` changes.
+  const [resultsKey, setResultsKey] = useState(0)
   const [emailCount, setEmailCount] = useState(0)
   const [rawCount, setRawCount] = useState(0)
   const [skippedKnown, setSkippedKnown] = useState(0)
@@ -514,14 +521,30 @@ export default function GmailModal({ onClose, syncToken, profile, onConnected, o
     setView('idle')
   }
 
+  // Helper: parse a JSON-encoded localStorage value, returning the fallback
+  // and self-healing the entry if the stored value is corrupt. This prevents
+  // a single bad write (or manual dev tinkering) from breaking sync forever.
+  const readJsonLS = (key, fallback) => {
+    const raw = localStorage.getItem(key)
+    if (raw == null) return fallback
+    try {
+      const parsed = JSON.parse(raw)
+      return parsed
+    } catch {
+      console.warn(`[GmailModal] Corrupt JSON in localStorage[${key}], resetting.`)
+      try { localStorage.removeItem(key) } catch { /* private mode */ }
+      return fallback
+    }
+  }
+
   const handleSync = async () => {
     if (syncingRef.current) return  // debounce
     syncingRef.current = true
     setView('syncing')
     setErrorMsg('')
     try {
-      const appsRaw = JSON.parse(localStorage.getItem('trackr-applications') || '[]')
-      const knownIds = JSON.parse(localStorage.getItem('trackr-synced-ids') || '[]')
+      const appsRaw = readJsonLS('trackr-applications', [])
+      const knownIds = readJsonLS('trackr-synced-ids', [])
       const res = await fetch(`${API}/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-sync-token': syncToken },
@@ -556,6 +579,7 @@ export default function GmailModal({ onClose, syncToken, profile, onConnected, o
       } else {
         setResults(allResults)
       }
+      setResultsKey((k) => k + 1)
       setView('results')
     } catch (err) {
       setErrorMsg(err.message)
@@ -621,6 +645,7 @@ export default function GmailModal({ onClose, syncToken, profile, onConnected, o
         )}
         {view === 'results' && (
           <ResultsView
+            key={resultsKey}
             results={results}
             emailCount={emailCount}
             rawCount={rawCount}

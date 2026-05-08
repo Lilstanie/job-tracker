@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useId } from 'react'
 import { X, Plus } from 'lucide-react'
 import { STAGES, ALL_TAGS } from '../data/mockData'
 
@@ -23,11 +23,11 @@ const inputStyle = {
   width: '100%',
 }
 
-function Field({ label, error, children }) {
+function Field({ label, error, htmlFor, children }) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between">
-        <label className="text-xs font-medium" style={{ color: '#9ca3af' }}>{label}</label>
+        <label htmlFor={htmlFor} className="text-xs font-medium" style={{ color: '#9ca3af' }}>{label}</label>
         {error && <span className="text-xs" style={{ color: '#ef4444' }}>{error}</span>}
       </div>
       {children}
@@ -38,6 +38,9 @@ function Field({ label, error, children }) {
 export default function AddApplicationModal({ onClose, onAdd, initial }) {
   const [form, setForm] = useState(initial ? { ...EMPTY, ...initial } : EMPTY)
   const [errors, setErrors] = useState({})
+  // Stable per-mount unique ids so <label htmlFor> binds to the right <input>.
+  const baseId = useId()
+  const fieldId = (k) => `${baseId}-${k}`
 
   // Escape key to close
   useEffect(() => {
@@ -51,7 +54,13 @@ export default function AddApplicationModal({ onClose, onAdd, initial }) {
     if (errors[k]) setErrors(e => ({ ...e, [k]: null }))
   }
 
-  const toggleTag = tag => set('tags', form.tags.includes(tag) ? form.tags.filter(t => t !== tag) : [...form.tags, tag])
+  // Use a functional updater so rapid clicks always work off the latest tags
+  // array — reading `form.tags` from render scope can lose toggles when React
+  // batches multiple events together.
+  const toggleTag = (tag) => setForm((f) => {
+    const has = f.tags.includes(tag)
+    return { ...f, tags: has ? f.tags.filter((t) => t !== tag) : [...f.tags, tag] }
+  })
 
   const handleSubmit = (e) => {
     e.preventDefault()
@@ -89,8 +98,9 @@ export default function AddApplicationModal({ onClose, onAdd, initial }) {
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-6 py-5">
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Company *" error={errors.company}>
+            <Field label="Company *" error={errors.company} htmlFor={fieldId('company')}>
               <input
+                id={fieldId('company')}
                 style={{ ...inputStyle, borderColor: errors.company ? '#ef4444' : '#2a2a38' }}
                 value={form.company}
                 onChange={e => set('company', e.target.value)}
@@ -100,8 +110,9 @@ export default function AddApplicationModal({ onClose, onAdd, initial }) {
                 onBlur={borderBlur}
               />
             </Field>
-            <Field label="Role" error={errors.role}>
+            <Field label="Role" error={errors.role} htmlFor={fieldId('role')}>
               <input
+                id={fieldId('role')}
                 style={{ ...inputStyle, borderColor: errors.role ? '#ef4444' : '#2a2a38' }}
                 value={form.role}
                 onChange={e => set('role', e.target.value)}
@@ -112,8 +123,9 @@ export default function AddApplicationModal({ onClose, onAdd, initial }) {
             </Field>
           </div>
 
-          <Field label="Job Posting URL">
+          <Field label="Job Posting URL" htmlFor={fieldId('url')}>
             <input
+              id={fieldId('url')}
               style={inputStyle}
               value={form.url}
               onChange={e => set('url', e.target.value)}
@@ -124,8 +136,9 @@ export default function AddApplicationModal({ onClose, onAdd, initial }) {
           </Field>
 
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Applied Date">
+            <Field label="Applied Date" htmlFor={fieldId('applied')}>
               <input
+                id={fieldId('applied')}
                 type="date"
                 style={{ ...inputStyle, colorScheme: 'dark' }}
                 value={form.applied}
@@ -134,8 +147,9 @@ export default function AddApplicationModal({ onClose, onAdd, initial }) {
                 onBlur={borderBlur}
               />
             </Field>
-            <Field label="Stage">
+            <Field label="Stage" htmlFor={fieldId('stage')}>
               <select
+                id={fieldId('stage')}
                 style={{ ...inputStyle, cursor: 'pointer' }}
                 value={form.stage}
                 onChange={e => set('stage', e.target.value)}
@@ -168,8 +182,9 @@ export default function AddApplicationModal({ onClose, onAdd, initial }) {
             </div>
           </Field>
 
-          <Field label="Notes">
+          <Field label="Notes" htmlFor={fieldId('notes')}>
             <textarea
+              id={fieldId('notes')}
               style={{ ...inputStyle, minHeight: 72, resize: 'vertical' }}
               value={form.notes}
               onChange={e => set('notes', e.target.value)}

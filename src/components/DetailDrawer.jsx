@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { X, ExternalLink, User, FileText, CheckSquare, Clock, Mail, Calendar, Edit2, Check } from 'lucide-react'
 import { STAGE_COLORS, STAGES } from '../data/mockData'
 import { formatDate, formatDateTime, relativeTime, deadlineCountdown } from '../utils/time'
+import { safeHref } from '../utils/url'
 
 const sectionStyle = {
   background: '#16161d',
@@ -285,10 +286,16 @@ export default function DetailDrawer({ app, onClose, onUpdate }) {
             </div>
             {app.url ? (
               <div className="flex items-center gap-2">
-                <a href={app.url} target="_blank" rel="noreferrer"
-                  className="text-sm truncate flex-1" style={{ color: '#6c63ff' }}>
-                  {app.url}
-                </a>
+                {safeHref(app.url) ? (
+                  <a href={safeHref(app.url)} target="_blank" rel="noopener noreferrer"
+                    className="text-sm truncate flex-1" style={{ color: '#6c63ff' }}>
+                    {app.url}
+                  </a>
+                ) : (
+                  <span className="text-sm truncate flex-1" style={{ color: '#ef4444' }} title="Invalid URL — only http(s) links are openable.">
+                    {app.url} (invalid URL)
+                  </span>
+                )}
                 <button onClick={() => onUpdate(app.id, { url: '' })}
                   className="text-xs shrink-0" style={{ color: '#6b6b84', background: 'none', border: 'none', cursor: 'pointer' }}>
                   Clear
@@ -329,15 +336,23 @@ export default function DetailDrawer({ app, onClose, onUpdate }) {
                 <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: '#6b6b84' }}>Documents</span>
               </div>
               <div className="flex flex-col gap-2">
-                {app.documents.map((d, i) => (
-                  <a key={i} href={d.url}
-                    className="flex items-center gap-2 text-sm"
-                    style={{ color: '#6c63ff' }}
-                    target="_blank" rel="noreferrer">
-                    <ExternalLink size={13} />
-                    {d.label}
-                  </a>
-                ))}
+                {app.documents.map((d, i) => {
+                  const href = safeHref(d.url)
+                  return href ? (
+                    <a key={i} href={href}
+                      className="flex items-center gap-2 text-sm"
+                      style={{ color: '#6c63ff' }}
+                      target="_blank" rel="noopener noreferrer">
+                      <ExternalLink size={13} />
+                      {d.label}
+                    </a>
+                  ) : (
+                    <span key={i} className="flex items-center gap-2 text-sm" style={{ color: '#6b6b84' }}>
+                      <FileText size={13} />
+                      {d.label}
+                    </span>
+                  )
+                })}
               </div>
             </div>
           )}

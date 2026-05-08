@@ -1,14 +1,30 @@
-import { useReducer, useCallback, useEffect } from 'react'
+import { useReducer, useCallback, useEffect, useMemo } from 'react'
 import { genId } from '../data/mockData'
 
 const STORAGE_KEY = 'trackr-apps-v1'
 
+// Normalise an application loaded from storage so the rest of the codebase
+// can rely on `app.history` always being an array. Older builds occasionally
+// wrote items without a history field, which would crash UPDATE / MOVE_STAGE
+// when we tried to spread a non-array.
+function normaliseApp(app) {
+  return {
+    ...app,
+    history: Array.isArray(app?.history) ? app.history : [],
+  }
+}
+
 function loadFromStorage() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) return JSON.parse(raw)
-  } catch {}
-  return []  // empty board by default — no mock data
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) ? parsed.map(normaliseApp) : []
+    }
+  } catch {
+    // Corrupt JSON — start clean rather than crash the app.
+  }
+  return [] // empty board by default — no mock data
 }
 
 function saveToStorage(state) {
@@ -18,7 +34,7 @@ function saveToStorage(state) {
     localStorage.setItem('trackr-applications', JSON.stringify(
       state.map(({ id, company, role, stage }) => ({ id, company, role, stage }))
     ))
-  } catch {}
+  } catch { /* private mode / quota */ }
 }
 
 function reducer(state, action) {
@@ -51,7 +67,8 @@ function reducer(state, action) {
         if (rest.stage && rest.stage !== app.stage) {
           let timestamp = new Date().toISOString()
           if (_emailDate) {
-            try { timestamp = new Date(_emailDate).toISOString() } catch {}
+            const t = Date.parse(_emailDate)
+            if (Number.isFinite(t)) timestamp = new Date(t).toISOString()
           }
           const entry = {
             stage: rest.stage,
@@ -62,7 +79,8 @@ function reducer(state, action) {
             entry.emailSubject = _emailEvidence.subject
             entry.emailFrom = _emailEvidence.from
           }
-          updated.history = [...app.history, entry]
+          const prevHistory = Array.isArray(app.history) ? app.history : []
+          updated.history = [...prevHistory, entry]
         }
         return updated
       })
@@ -72,11 +90,12 @@ function reducer(state, action) {
     case 'MOVE_STAGE':
       return state.map(app => {
         if (app.id !== action.id) return app
+        const prevHistory = Array.isArray(app.history) ? app.history : []
         return {
           ...app,
           stage: action.stage,
           history: [
-            ...app.history,
+            ...prevHistory,
             { stage: action.stage, timestamp: new Date().toISOString(), note: `Moved to ${action.stage}` },
           ],
         }
@@ -102,24 +121,41 @@ export function useApplications() {
   const moveStage = useCallback((id, stage) => dispatch({ type: 'MOVE_STAGE', id, stage }), [])
   const resetApplications = useCallback(() => dispatch({ type: 'RESET_ALL' }), [])
 
-  const getStats = useCallback(() => {
-    const total = applications.length
-    const offers = applications.filter(a => a.stage === 'Offer').length
-    const rejected = applications.filter(a => a.stage === 'Rejected').length
-    const inProgress = applications.filter(a => !['Applied', 'Offer', 'Rejected'].includes(a.stage)).length
-    const responded = applications.filter(a => a.stage !== 'Applied').length
+  // Time-independent stats are memoised by `applications` so the linear scan
+  // runs once per data change rather than every render of the consumer.
+  const baseStats = useMemo(() => {
+    let total = 0, offers = 0, rejected = 0, inProgress = 0, responded = 0
+    for (const a of applications) {
+      total++
+      if (a.stage === 'Offer') offers++
+      else if (a.stage === 'Rejected') rejected++
+      else if (a.stage !== 'Applied') inProgress++
+      if (a.stage !== 'Applied') responded++
+    }
     const responseRate = total > 0 ? Math.round((responded / total) * 100) : 0
-
-    const now = Date.now()
-    const in7d = now + 7 * 86400000
-    const urgentDeadlines = applications.filter(a => {
-      if (!a.deadline) return false
-      const t = new Date(a.deadline).getTime()
-      return t >= now && t <= in7d
-    }).length
-
-    return { total, offers, rejected, inProgress, responseRate, urgentDeadlines }
+    return { total, offers, rejected, inProgress, responseRate }
   }, [applications])
 
-  return { applications, addApplication, updateApplication, deleteApplication, moveStage, resetApplications, getStats }
+  // urgentDeadlines is intentionally time-dependent — it must reflect "the
+  // next 7 days from now". Kept in a useCallback (NOT useMemo) because
+  // useMemo's purity rule would flag Date.now(), and the work is cheap.
+  const getStats = useCallback(() => {
+    const now = Date.now()
+    const in7d = now + 7 * 86_400_000
+    let urgentDeadlines = 0
+    for (const a of applications) {
+      if (!a.deadline) continue
+      const t = Date.parse(a.deadline)
+      if (Number.isFinite(t) && t >= now && t <= in7d) urgentDeadlines++
+    }
+    return { ...baseStats, urgentDeadlines }
+  }, [applications, baseStats])
+
+  // Snapshot the time-dependent stats once per render of the consumer so
+  // App.jsx can pass `stats` directly to children without each child also
+  // calling getStats(). Using useMemo with Date.now() inside getStats is
+  // safe because useCallback bodies are not subject to the purity rule.
+  const stats = getStats()
+
+  return { applications, addApplication, updateApplication, deleteApplication, moveStage, resetApplications, getStats, stats }
 }

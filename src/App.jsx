@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { Plus, Mail, CheckCircle, LayoutDashboard, GitBranch, Search, X } from 'lucide-react'
 import { STAGES, STAGE_COLORS } from './data/mockData'
 import Sidebar from './components/Sidebar'
@@ -14,7 +14,7 @@ import { filterApplications } from './utils/filterApplications'
 const API = '/api/gmail'
 
 export default function App() {
-  const { applications, addApplication, updateApplication, deleteApplication, moveStage, resetApplications, getStats } = useApplications()
+  const { applications, addApplication, updateApplication, deleteApplication, moveStage, resetApplications, stats } = useApplications()
   const [showAdd, setShowAdd] = useState(false)
   const [editApp, setEditApp] = useState(null)
   const [detailApp, setDetailApp] = useState(null)
@@ -25,7 +25,21 @@ export default function App() {
   const [toast, setToast] = useState(null)
   const [filter, setFilter] = useState({ query: '', stages: new Set() })
 
-  const stats = getStats()
+  // Toast timer is tracked in a ref so we can cancel a pending dismiss when a
+  // new toast arrives (otherwise rapid toasts overlap and the older timer can
+  // hide the newer one). Also cleared on unmount.
+  const toastTimerRef = useRef(null)
+  const showToast = useCallback((message, type = 'success') => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    setToast({ message, type })
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null)
+      toastTimerRef.current = null
+    }, 4000)
+  }, [])
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+  }, [])
 
   const filteredApps = useMemo(() => {
     return filterApplications(applications, filter)
@@ -42,31 +56,46 @@ export default function App() {
       window.history.replaceState({}, '', window.location.pathname)
       setShowGmail(true)
     }
-    if (error) showToast(`Gmail connection failed: ${error}`, 'error')
-  }, [])
+    if (error) {
+      // Restrict to the small set of error codes the OAuth callback emits so
+      // an attacker can't inject arbitrary text (and prevent any HTML/JS by
+      // hard-capping length and stripping non-printable characters).
+      const ALLOWED_ERRORS = new Set(['access_denied', 'token_exchange_failed'])
+      const safe = ALLOWED_ERRORS.has(error)
+        ? error
+        : String(error).replace(/[^a-z0-9_-]/gi, '').slice(0, 40) || 'unknown'
+      showToast(`Gmail connection failed: ${safe}`, 'error')
+    }
+  }, [showToast])
 
-  // Fetch Google profile whenever syncToken changes
+  // Fetch Google profile whenever syncToken changes. Uses AbortController so a
+  // rapid token change cancels the previous in-flight request before its
+  // setState lands (otherwise stale data can clobber fresh state).
   useEffect(() => {
     if (!syncToken) { setGmailProfile(null); return }
-    fetch(`${API}/profile`, { headers: { 'x-sync-token': syncToken } })
-      .then(r => r.json())
-      .then(data => {
+    const ctrl = new AbortController()
+    fetch(`${API}/profile`, { headers: { 'x-sync-token': syncToken }, signal: ctrl.signal })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((data) => {
         if (data.connected && data.profile) {
           setGmailProfile(data.profile)
         } else if (!data.connected) {
-          // Token no longer valid on server side
           setSyncToken(null)
           localStorage.removeItem('gmailSyncToken')
           setGmailProfile(null)
         }
       })
-      .catch(() => {})
-  }, [syncToken])
-
-  const showToast = (message, type = 'success') => {
-    setToast({ message, type })
-    setTimeout(() => setToast(null), 4000)
-  }
+      .catch((err) => {
+        if (err?.name === 'AbortError') return
+        // Surface a user-visible error rather than silently leaving the user
+        // "connected" with no UI feedback.
+        showToast('Could not reach the Gmail API — check your connection or reconnect.', 'error')
+      })
+    return () => ctrl.abort()
+  }, [syncToken, showToast])
 
   const handleEdit = (app) => { setDetailApp(null); setEditApp(app) }
   const handleEditSave = (data) => { updateApplication(editApp.id, data); setEditApp(null) }
@@ -215,9 +244,9 @@ export default function App() {
     resetApplications()
     localStorage.removeItem('trackr-synced-ids')
     localStorage.removeItem('trackr-applications')
-    localStorage.removeItem('gmailSyncToken')
-    setSyncToken(null)
-    setGmailProfile(null)
+    // Intentionally keep `gmailSyncToken` and the connected profile so the
+    // user does not have to re-authenticate after wiping local data. Use
+    // "Disconnect Gmail" if you want to revoke the OAuth session.
     setFilter({ query: '', stages: new Set() })
     showToast('Local archive cleared', 'success')
   }

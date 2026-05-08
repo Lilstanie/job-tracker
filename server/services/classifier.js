@@ -784,11 +784,27 @@ function extractRole(subject, company, bodyText = '') {
     return { role: roleLabel[1].trim().replace(/\s+/g, ' ').slice(0, 100), roleSource: 'explicit' }
   }
 
-  // "applying to the 2027 <Company> Graduate Program" style
-  const applyMatch = fullText.match(/(?:applying\s+to\s+(?:the\s+)?|applied\s+for\s+(?:the\s+)?|your\s+application\s+(?:for|to)\s+(?:the\s+)?)(\d{0,5}\s*[A-Z][^.]{4,80}?(?:program|programme|pathway|stream|position|role|internship))/i)
+  // "applying to the 2027 <Company> Graduate Program" style.
+  // After capturing the short form, try to extend with " - <Specialisation>"
+  // continuations (e.g. Macquarie banking divisions) until we hit a sentence
+  // boundary or transition word. This preserves the full role description on
+  // multi-line program names without over-capturing into the next sentence.
+  const applyMatch = fullText.match(/(?:applying\s+to\s+(?:the\s+)?|applied\s+for\s+(?:the\s+)?|your\s+application\s+(?:for|to)\s+(?:our\s+|the\s+)?)(\d{0,5}\s*[A-Z][^.]{4,80}?(?:program|programme|pathway|stream|position|role|internship))/i)
   if (applyMatch) {
-    const cleaned = cleanRoleText(applyMatch[1].trim().replace(/\s+/g, ' '))
-    return { role: cleaned.slice(0, 100), roleSource: 'explicit' }
+    let cleaned = cleanRoleText(applyMatch[1].trim().replace(/\s+/g, ' '))
+    const afterRoleIdx = applyMatch.index + applyMatch[0].length
+    // Only extend if the next chars are an explicit " - <more>" continuation —
+    // anchored on a hyphen so unrelated trailing context (e.g. "at this time",
+    // "for future opportunities") is never absorbed into the role. Stops at
+    // pipe/period/newline OR a transition word like ", we appreciate".
+    const continuation = fullText.slice(afterRoleIdx).match(
+      /^(\s*[-–—]\s*[^.\n\r|]{3,180}?)(?=\s*\||,\s+(?:we|i|please|thanks?|kind|after|following|while|so|because|since)\b|\.\s|\.\s*$|\.\s*\n|\s+at\s+[A-Z][a-z]|$)/i
+    )
+    if (continuation) {
+      const tail = cleanRoleText(continuation[1].replace(/^\s*[-–—]\s*/, '').trim())
+      if (tail) cleaned = `${cleaned} - ${tail}`.replace(/\s{2,}/g, ' ').trim()
+    }
+    return { role: cleaned.slice(0, 150), roleSource: 'explicit' }
   }
 
   // "apply for the JR-10164745 2027 Graduate Program - Software Engineering role"

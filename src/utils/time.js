@@ -1,18 +1,33 @@
+// All helpers safely handle null/undefined/invalid date strings instead of
+// rendering "NaNd ago" / "Invalid Date" in the UI. They return either a sane
+// fallback string ('') or null when the date is unusable.
+
+const DAY_MS = 86_400_000
+
+function parseDate(input) {
+  if (input == null || input === '') return null
+  const t = typeof input === 'number' ? input : Date.parse(input)
+  return Number.isFinite(t) ? t : null
+}
+
 export function relativeTime(dateStr) {
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const days = Math.floor(diff / 86400000)
-  if (days === 0) return 'Today'
-  if (days === 1) return 'Yesterday'
-  if (days < 7) return `${days}d ago`
-  if (days < 30) return `${Math.floor(days / 7)}w ago`
-  if (days < 365) return `${Math.floor(days / 30)}mo ago`
-  return `${Math.floor(days / 365)}y ago`
+  const t = parseDate(dateStr)
+  if (t == null) return ''
+  const diffDays = Math.floor((Date.now() - t) / DAY_MS)
+  // Future dates: don't render nonsense like "-2d ago"; treat as "Today".
+  if (diffDays < 0) return 'Today'
+  if (diffDays === 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+  if (diffDays < 7) return `${diffDays}d ago`
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`
+  if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`
+  return `${Math.floor(diffDays / 365)}y ago`
 }
 
 export function deadlineCountdown(dateStr) {
-  if (!dateStr) return null
-  const diff = new Date(dateStr).getTime() - Date.now()
-  const days = Math.ceil(diff / 86400000)
+  const t = parseDate(dateStr)
+  if (t == null) return null
+  const days = Math.ceil((t - Date.now()) / DAY_MS)
   if (days < 0) return { label: 'Expired', urgent: true }
   if (days === 0) return { label: 'Due today', urgent: true }
   if (days <= 3) return { label: `${days}d left`, urgent: true }
@@ -21,10 +36,13 @@ export function deadlineCountdown(dateStr) {
 }
 
 export function formatDate(dateStr) {
-  if (!dateStr) return ''
-  return new Date(dateStr).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
+  const t = parseDate(dateStr)
+  if (t == null) return ''
+  return new Date(t).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 export function formatDateTime(isoStr) {
-  return new Date(isoStr).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  const t = parseDate(isoStr)
+  if (t == null) return ''
+  return new Date(t).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
